@@ -12,7 +12,8 @@
     "start": "node dist/src/index.js",
     "dev": "tsx src/index.ts",
     "auth:oauth": "tsx scripts/get-oauth-token.ts",
-    "auth:apikey": "tsx scripts/get-apikey-credentials.ts"
+    "auth:apikey": "tsx scripts/get-apikey-credentials.ts",
+    "auth:session": "tsx scripts/login-browser.ts"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -20,6 +21,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "dotenv": "^17.4.2",
+    "playwright": "^1.63.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {

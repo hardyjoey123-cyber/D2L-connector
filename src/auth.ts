@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type { Config } from "./config.js";
 
 /**
@@ -118,6 +120,73 @@ function signRequest(
   };
 }
 
+interface PlaywrightStorageStateCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number; // epoch seconds, or -1 for session cookies
+}
+
+interface CachedCookieHeader {
+  header: string;
+  mtimeMs: number;
+}
+
+let cachedCookieHeader: CachedCookieHeader | null = null;
+
+/** Returns true if `cookieDomain` (as stored by Playwright) applies to `host`. */
+function cookieAppliesToHost(cookieDomain: string, host: string): boolean {
+  const normalizedCookieDomain = cookieDomain.replace(/^\./, "");
+  return host === normalizedCookieDomain || host.endsWith(`.${normalizedCookieDomain}`);
+}
+
+/**
+ * Builds a `Cookie` header by replaying the session cookies captured into a
+ * Playwright storageState.json file (see scripts/login-browser.ts). This lets
+ * the server act as the logged-in user against Brightspace's own JSON API
+ * endpoints, for institutions that won't issue OAuth or Valence ID/Key
+ * credentials. No password is ever stored — only the resulting session
+ * cookies, which expire like any normal browser session.
+ */
+function getSessionCookieHeader(config: Config, host: string): string {
+  const statePath = path.resolve(config.session!.statePath);
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(statePath);
+  } catch {
+    throw new Error(
+      `No saved Brightspace session found at ${statePath}. Run \`npm run auth:session\` to log in first.`
+    );
+  }
+
+  if (cachedCookieHeader && cachedCookieHeader.mtimeMs === stat.mtimeMs) {
+    return cachedCookieHeader.header;
+  }
+
+  const state = JSON.parse(fs.readFileSync(statePath, "utf-8")) as {
+    cookies: PlaywrightStorageStateCookie[];
+  };
+
+  const now = Date.now() / 1000;
+  const relevant = state.cookies.filter(
+    (cookie) =>
+      cookieAppliesToHost(cookie.domain, host) && (cookie.expires < 0 || cookie.expires > now)
+  );
+
+  if (relevant.length === 0) {
+    throw new Error(
+      `Saved Brightspace session at ${statePath} has no valid cookies for ${host}. ` +
+        "It may have expired — run `npm run auth:session` again to log back in."
+    );
+  }
+
+  const header = relevant.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+  cachedCookieHeader = { header, mtimeMs: stat.mtimeMs };
+  return header;
+}
+
 /**
  * Builds the headers/query parameters needed to authenticate `method absoluteUrl`
  * (absoluteUrl must not include a query string) against Brightspace.
@@ -131,6 +200,14 @@ export async function authenticateRequest(
     const accessToken = await getOAuthAccessToken(config);
     return {
       headers: { Authorization: `Bearer ${accessToken}` },
+      query: {},
+    };
+  }
+
+  if (config.authMethod === "session") {
+    const host = new URL(absoluteUrlWithoutQuery).hostname;
+    return {
+      headers: { Cookie: getSessionCookieHeader(config, host) },
       query: {},
     };
   }

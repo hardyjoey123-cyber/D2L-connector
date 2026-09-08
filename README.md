@@ -18,10 +18,16 @@ then query assignments/grades/announcements for whichever course you're interest
 
 ## Authentication
 
-Brightspace supports two authentication methods for the Valence API; this server implements
-both. **OAuth 2.0 is recommended** — it's the currently supported, officially documented
-method. The legacy ID/Key scheme is provided as a fallback for instances where you can't
-register an OAuth application.
+This server supports three ways to authenticate, in order of preference:
+
+- **OAuth 2.0** (Option A) — the officially supported, recommended method.
+- **Legacy Valence ID/Key** (Option B) — an older fallback for instances without OAuth.
+- **Session cookie replay** (Option C) — a workaround for when your institution won't issue
+  either of the above to individual users at all (common for students).
+
+Options A and B both require an admin-registered API application. If you don't have access
+to Brightspace's "Admin Tools > API Management" and can't get IT to register one for you,
+skip to **Option C**.
 
 ### Option A: OAuth 2.0 (recommended)
 
@@ -82,6 +88,49 @@ combined via HMAC-SHA256 request signing.
    If this doesn't work on your instance, use Option A (OAuth) instead — it's the modern,
    fully standardized path.
 
+### Option C: Session cookie workaround (no admin access needed)
+
+Many institutions (especially for student accounts) don't expose API application
+registration to anyone but IT/LMS admins. If that's you, this option authenticates by
+reusing your own logged-in browser session instead of an API credential — no admin
+involvement required.
+
+**Read this before using it:**
+- Your **password is never seen or stored** by this tool. Only the resulting session
+  cookies are saved locally, and only after you log in yourself in a real browser window.
+- This calls Brightspace's own internal JSON API endpoints (the same ones its web UI uses)
+  authenticated as your browser session, rather than through a sanctioned API credential.
+  Automated access like this is commonly against an institution's acceptable-use policy for
+  their LMS, even when it's your own data — use your judgment about your school's rules.
+- Sessions expire (typically hours to a couple of weeks, depending on your school's
+  settings), so you'll periodically need to redo the one-time login below.
+- If your school ever tightens security around the API endpoints this depends on, this
+  method can stop working with no warning; Options A/B are more durable when available.
+
+Setup:
+
+1. Copy `.env.example` to `.env` and fill in:
+   ```
+   BRIGHTSPACE_DOMAIN=d2l.yourschool.edu
+   BRIGHTSPACE_AUTH_METHOD=session
+   ```
+2. Install dependencies and the Playwright browser binary it needs:
+   ```
+   npm install
+   npx playwright install chromium
+   ```
+3. Log in interactively:
+   ```
+   npm run auth:session
+   ```
+   A real Chromium window opens to your Brightspace login page. Log in exactly as you
+   normally would, including any two-factor/SSO step your school requires. Once you land on
+   your Brightspace dashboard, the script detects it, saves your session to
+   `.auth/storageState.json` (already gitignored — never commit this file), and closes the
+   browser.
+4. Whenever a tool call fails with a message about an expired session, just re-run
+   `npm run auth:session`.
+
 ## Running the server
 
 ```
@@ -141,8 +190,11 @@ course's org unit ID, then the relevant follow-up tool.
 
 ## Security notes
 
-- Credentials (client secret, refresh token, or app/user keys) are read from environment
-  variables / `.env` and never logged. Keep `.env` out of version control (it's already in
-  `.gitignore`).
+- Credentials (client secret, refresh token, app/user keys, or session cookies) are read
+  from environment variables / local files and never logged. Keep `.env` and `.auth/` out of
+  version control (both are already in `.gitignore`).
 - This server only performs read (`GET`) requests — it cannot modify grades, submit
   assignments, or post announcements.
+- The session cookie method (Option C) grants whoever holds `.auth/storageState.json` full
+  access to your Brightspace account for the life of that session — treat that file like a
+  password and never share or commit it.

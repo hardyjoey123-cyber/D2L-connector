@@ -69,6 +69,23 @@ export class D2LClient {
       return undefined as T;
     }
 
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("json")) {
+      // A 200 response that isn't JSON usually means Brightspace silently
+      // redirected to an HTML login page instead of returning an API error —
+      // most commonly an expired session cookie (BRIGHTSPACE_AUTH_METHOD=session).
+      const hint =
+        this.config.authMethod === "session"
+          ? " Your saved browser session has likely expired — run `npm run auth:session` again to log back in."
+          : "";
+      throw new D2LApiError(
+        response.status,
+        "Received a non-JSON response (likely a login redirect).",
+        url.toString(),
+        hint
+      );
+    }
+
     return (await response.json()) as T;
   }
 

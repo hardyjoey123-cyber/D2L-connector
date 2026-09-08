@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-export type AuthMethod = "oauth" | "apikey";
+export type AuthMethod = "oauth" | "apikey" | "session";
 
 export interface OAuthConfig {
   clientId: string;
@@ -18,11 +18,17 @@ export interface ApiKeyConfig {
   userKey: string;
 }
 
+export interface SessionConfig {
+  /** Path to a Playwright storageState.json produced by `npm run auth:session`. */
+  statePath: string;
+}
+
 export interface Config {
   domain: string;
   authMethod: AuthMethod;
   oauth?: OAuthConfig;
   apiKey?: ApiKeyConfig;
+  session?: SessionConfig;
 }
 
 function required(name: string): string {
@@ -46,9 +52,9 @@ export function loadConfig(): Config {
     .trim()
     .toLowerCase() as AuthMethod;
 
-  if (authMethod !== "oauth" && authMethod !== "apikey") {
+  if (authMethod !== "oauth" && authMethod !== "apikey" && authMethod !== "session") {
     throw new Error(
-      `Invalid BRIGHTSPACE_AUTH_METHOD "${authMethod}". Must be "oauth" or "apikey".`
+      `Invalid BRIGHTSPACE_AUTH_METHOD "${authMethod}". Must be "oauth", "apikey", or "session".`
     );
   }
 
@@ -69,12 +75,16 @@ export function loadConfig(): Config {
         process.env.BRIGHTSPACE_OAUTH_SCOPE ||
         "core:*:* content:toc:read enrollment:orgunit:read grades:gradeobject:read grades:gradevalue:read dropbox:folder:read dropbox:file:read",
     };
-  } else {
+  } else if (authMethod === "apikey") {
     config.apiKey = {
       appId: required("BRIGHTSPACE_APP_ID"),
       appKey: required("BRIGHTSPACE_APP_KEY"),
       userId: required("BRIGHTSPACE_USER_ID"),
       userKey: required("BRIGHTSPACE_USER_KEY"),
+    };
+  } else {
+    config.session = {
+      statePath: process.env.BRIGHTSPACE_SESSION_STATE_PATH || ".auth/storageState.json",
     };
   }
 
