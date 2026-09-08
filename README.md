@@ -6,12 +6,19 @@ D2L Brightspace account, exposing your **courses**, **assignments**, **grades**,
 
 ## Tools
 
-| Tool                  | Description                                                                 |
-| --------------------- | ---------------------------------------------------------------------------- |
-| `list_courses`        | Lists your course enrollments (name, code, org unit ID, dates, role).        |
-| `list_assignments`    | Lists dropbox/assignment folders for a course. Takes `orgUnitId`.           |
-| `list_grades`         | Lists your grade values for a course. Takes `orgUnitId`.                    |
-| `list_announcements`  | Lists announcements (news items) for a course. Takes `orgUnitId`.           |
+| Tool                     | Description                                                                      |
+| ------------------------ | --------------------------------------------------------------------------------- |
+| `list_courses`           | Lists your course enrollments (name, code, org unit ID, dates, role).             |
+| `list_assignments`       | Lists dropbox/assignment folders for a course. Takes `orgUnitId`.                |
+| `list_grades`            | Lists your grade values for a course. Takes `orgUnitId`.                         |
+| `list_announcements`     | Lists announcements (news items) for a course. Takes `orgUnitId`.                |
+| `list_quizzes`           | Lists quizzes for a course. Takes `orgUnitId`.                                   |
+| `list_discussion_topics` | Lists discussion topics (across all forums) for a course. Takes `orgUnitId`.     |
+| `list_discussion_posts`  | Lists posts within one discussion topic. Takes `orgUnitId` and `topicId`.        |
+
+Note: `list_assignments` only covers Brightspace's native Dropbox folders. Coursework hosted on
+a third-party publisher platform (e.g. Connect, MyLab, WileyPLUS) that a course merely links out
+to won't appear here — that's a separate system outside Brightspace's API entirely.
 
 `orgUnitId` comes from the `list_courses` result — ask Claude to list your courses first,
 then query assignments/grades/announcements for whichever course you're interested in.
@@ -187,6 +194,10 @@ course's org unit ID, then the relevant follow-up tool.
   - Grades: `GET /d2l/api/le/{version}/{orgUnitId}/grades/` +
     `GET /d2l/api/le/{version}/{orgUnitId}/grades/values/myGradeValues/`
   - Announcements: `GET /d2l/api/le/{version}/{orgUnitId}/news/`
+  - Quizzes: `GET /d2l/api/le/{version}/{orgUnitId}/quizzes/`
+  - Discussion topics: `GET /d2l/api/le/{version}/{orgUnitId}/discussions/forums/` +
+    `GET /d2l/api/le/{version}/{orgUnitId}/discussions/forums/{forumId}/topics/` per forum
+  - Discussion posts: `GET /d2l/api/le/{version}/{orgUnitId}/discussions/topics/{topicId}/posts/`
 
 ## Security notes
 
