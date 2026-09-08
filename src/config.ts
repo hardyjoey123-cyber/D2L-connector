@@ -1,4 +1,31 @@
-import "dotenv/config";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
+
+/**
+ * Walks up from `startDir` to find the directory containing package.json.
+ * Needed because this file's own location differs between dev (src/config.ts)
+ * and the compiled build (dist/src/config.js) — searching for package.json
+ * finds the true project root either way, rather than hardcoding a depth.
+ */
+function findProjectRoot(startDir: string): string {
+  let dir = startDir;
+  while (true) {
+    if (fs.existsSync(path.join(dir, "package.json"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return startDir;
+    dir = parent;
+  }
+}
+
+// Resolve paths relative to the project root, not process.cwd() — MCP
+// clients commonly spawn this server from an arbitrary working directory,
+// so relying on cwd would silently fail to find .env or a relative session
+// state path.
+export const projectRoot = findProjectRoot(path.dirname(fileURLToPath(import.meta.url)));
+
+dotenv.config({ path: path.join(projectRoot, ".env") });
 
 export type AuthMethod = "oauth" | "apikey" | "session";
 
@@ -83,8 +110,9 @@ export function loadConfig(): Config {
       userKey: required("BRIGHTSPACE_USER_KEY"),
     };
   } else {
+    const rawStatePath = process.env.BRIGHTSPACE_SESSION_STATE_PATH || ".auth/storageState.json";
     config.session = {
-      statePath: process.env.BRIGHTSPACE_SESSION_STATE_PATH || ".auth/storageState.json",
+      statePath: path.isAbsolute(rawStatePath) ? rawStatePath : path.join(projectRoot, rawStatePath),
     };
   }
 
