@@ -1,0 +1,30 @@
+{
+  "name": "d2l-brightspace-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server that connects Claude to a D2L Brightspace account for courses, assignments, grades, and announcements.",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "bin": {
+    "d2l-brightspace-mcp-server": "dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/index.js",
+    "dev": "tsx src/index.ts",
+    "auth:oauth": "tsx scripts/get-oauth-token.ts",
+    "auth:apikey": "tsx scripts/get-apikey-credentials.ts"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "dotenv": "^17.4.2",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
