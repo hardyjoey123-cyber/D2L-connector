@@ -11,6 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/index.js",
     "dev": "tsx src/index.ts",
+    "jarvis": "tsx web/server/index.ts",
+    "jarvis:start": "node dist/web/server/index.js",
     "auth:oauth": "tsx scripts/get-oauth-token.ts",
     "auth:apikey": "tsx scripts/get-apikey-credentials.ts",
     "auth:session": "tsx scripts/login-browser.ts"
@@ -19,6 +21,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "dotenv": "^17.4.2",
     "playwright": "^1.63.0",

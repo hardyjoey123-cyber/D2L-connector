@@ -1,0 +1,509 @@
+/* ---------------------------------------------------------------------------
+   JARVIS interface — dark holographic HUD.
+   State lives on <body> as is-idle / is-listening / is-thinking / is-speaking;
+   everything below reads --accent and --glow, so a state change re-tints the
+   whole screen at once.
+   --------------------------------------------------------------------------- */
+
+/* Registered so state changes interpolate rather than snap. Browsers without
+   @property still get the colors, just without the crossfade. */
+@property --accent {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 190;
+}
+
+@property --glow {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.55;
+}
+
+:root {
+  --void: #02060b;
+  --accent: 190;                    /* hue, degrees — shifted per state */
+  --accent-color: hsl(var(--accent) 95% 62%);
+  --accent-soft: hsl(var(--accent) 90% 70% / 0.55);
+  --accent-faint: hsl(var(--accent) 85% 70% / 0.14);
+  --glow: 0.55;                     /* 0…1 intensity, animated per state */
+  --text: hsl(var(--accent) 45% 88% / 0.9);
+  --text-dim: hsl(var(--accent) 40% 80% / 0.42);
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+body.is-listening { --accent: 186; --glow: 1; }
+body.is-thinking  { --accent: 205; --glow: 0.75; }
+body.is-speaking  { --accent: 178; --glow: 0.92; }
+body.is-error     { --accent: 8;   --glow: 0.8; }
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--sans);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  transition: --accent 600ms linear, --glow 600ms linear;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------------------------------------------------------------- backdrop */
+
+#ambient {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+.vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      120% 90% at 50% 46%,
+      hsl(var(--accent) 90% 50% / calc(0.1 * var(--glow))) 0%,
+      transparent 62%
+    ),
+    radial-gradient(140% 120% at 50% 50%, transparent 38%, #01040800 55%, #010408e6 100%);
+  transition: background 700ms linear;
+}
+
+/* Hairline corner brackets — cheap way to read as an instrument, not a page. */
+.frame {
+  position: fixed;
+  inset: 18px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.frame__corner {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 1px solid hsl(var(--accent) 90% 65% / 0.28);
+}
+
+.frame__corner--tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+.frame__corner--tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+.frame__corner--bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+.frame__corner--br { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+
+/* --------------------------------------------------------------------- HUD */
+
+.hud,
+.stage,
+.subtitles,
+.controls,
+.typed {
+  position: relative;
+  z-index: 3;
+}
+
+.hud {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 34px 44px 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.hud__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hud__mark {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  box-shadow: 0 0 10px 2px hsl(var(--accent) 95% 60% / calc(0.9 * var(--glow)));
+  animation: pulse 2.6s var(--ease) infinite;
+}
+
+.hud__name {
+  color: hsl(var(--accent) 70% 82% / 0.8);
+}
+
+.hud__meta {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+
+/* -------------------------------------------------------------------- core */
+
+.stage {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 0;
+  min-height: 0;
+  padding: 0 24px;
+}
+
+.core {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  display: block;
+  width: min(58vh, 78vw, 520px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transition: transform 400ms var(--ease), filter 400ms var(--ease);
+  filter: drop-shadow(0 0 40px hsl(var(--accent) 95% 55% / calc(0.22 * var(--glow))));
+}
+
+.core:hover { transform: scale(1.015); }
+.core:active { transform: scale(0.985); }
+
+.core:focus-visible {
+  outline: 1px solid hsl(var(--accent) 90% 65% / 0.5);
+  outline-offset: 14px;
+}
+
+.core canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.status {
+  margin: 26px 0 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.5em;
+  text-indent: 0.5em;
+  text-transform: uppercase;
+  color: hsl(var(--accent) 85% 72% / calc(0.45 + 0.5 * var(--glow)));
+  text-shadow: 0 0 18px hsl(var(--accent) 95% 55% / calc(0.5 * var(--glow)));
+  transition: color 400ms linear;
+}
+
+.hint {
+  margin: 10px 0 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  opacity: 0.7;
+  transition: opacity 400ms var(--ease);
+}
+
+.hint kbd {
+  font: inherit;
+  border: 1px solid hsl(var(--accent) 80% 70% / 0.25);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+body.is-engaged .hint { opacity: 0; }
+
+/* No keyboard to press on a touch device. */
+@media (pointer: coarse) {
+  .hint__key { display: none; }
+}
+
+/* --------------------------------------------------------------- subtitles */
+
+.subtitles {
+  min-height: 148px;
+  padding: 0 clamp(24px, 8vw, 120px);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 8px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.subtitle {
+  margin: 0;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 500ms var(--ease), transform 500ms var(--ease);
+}
+
+.subtitle.is-shown {
+  opacity: 1;
+  transform: none;
+}
+
+.subtitle--user {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.subtitle--user.is-interim {
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.subtitle--reply {
+  font-size: clamp(13px, 1.5vw, 16px);
+  line-height: 1.7;
+  font-weight: 300;
+  letter-spacing: 0.012em;
+  color: hsl(var(--accent) 50% 86% / 0.6);
+  max-width: 62ch;
+  margin-inline: auto;
+  /* Long answers stay quiet rather than taking over the screen — the full
+     text is always in the transcript panel. A hard clamp reads better than a
+     gradient fade, which cut short replies off mid-line. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- controls */
+
+.controls {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 24px 34px;
+  flex-wrap: wrap;
+}
+
+.ctl {
+  appearance: none;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: hsl(var(--accent) 80% 50% / 0.05);
+  border: 1px solid hsl(var(--accent) 80% 65% / 0.18);
+  border-radius: 999px;
+  padding: 9px 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 250ms, border-color 250ms, background 250ms;
+}
+
+.ctl:hover {
+  color: hsl(var(--accent) 80% 85% / 0.9);
+  border-color: hsl(var(--accent) 85% 65% / 0.45);
+  background: hsl(var(--accent) 80% 50% / 0.1);
+}
+
+.ctl:focus-visible {
+  outline: 1px solid hsl(var(--accent) 90% 65% / 0.6);
+  outline-offset: 3px;
+}
+
+.ctl[aria-pressed="true"],
+.ctl[aria-expanded="true"] {
+  color: hsl(var(--accent) 90% 80% / 0.95);
+  border-color: hsl(var(--accent) 90% 65% / 0.55);
+  background: hsl(var(--accent) 85% 50% / 0.14);
+}
+
+.ctl__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* ------------------------------------------------------------- typed input */
+
+.typed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(560px, calc(100% - 48px));
+  margin: 0 auto 18px;
+  padding: 12px 18px;
+  border: 1px solid hsl(var(--accent) 80% 65% / 0.22);
+  border-radius: 999px;
+  background: hsl(var(--accent) 70% 30% / 0.07);
+  backdrop-filter: blur(6px);
+}
+
+.typed[hidden] { display: none; }
+
+.typed__caret {
+  font-family: var(--mono);
+  color: var(--accent-soft);
+  font-size: 12px;
+}
+
+.typed__input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.typed__input::placeholder { color: var(--text-dim); }
+
+/* -------------------------------------------------------------- transcript */
+
+.log {
+  position: fixed;
+  z-index: 6;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(400px, 88vw);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #04090f 0%, #020609 100%);
+  border-left: 1px solid hsl(var(--accent) 80% 65% / 0.2);
+  box-shadow: -30px 0 60px -30px hsl(var(--accent) 90% 40% / 0.5);
+  animation: slide-in 320ms var(--ease);
+}
+
+.log[hidden] { display: none; }
+
+@keyframes slide-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+
+.log__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 22px 14px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid hsl(var(--accent) 80% 65% / 0.12);
+}
+
+.log__close {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.log__close:hover { color: var(--accent-color); }
+
+.log__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--accent) 80% 60% / 0.25) transparent;
+}
+
+.log__turn {
+  font-size: 13px;
+  line-height: 1.6;
+  font-weight: 300;
+}
+
+.log__turn::before {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+}
+
+.log__turn--user { color: hsl(var(--accent) 30% 85% / 0.62); }
+.log__turn--user::before { content: "You"; }
+.log__turn--assistant { color: hsl(var(--accent) 60% 88% / 0.82); }
+.log__turn--assistant::before { content: "Jarvis"; }
+
+.log__empty {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
+/* ------------------------------------------------------------------- toast */
+
+.toast {
+  position: fixed;
+  z-index: 7;
+  left: 50%;
+  bottom: 108px;
+  transform: translateX(-50%);
+  max-width: min(520px, calc(100% - 48px));
+  padding: 11px 18px;
+  border: 1px solid hsl(8 85% 60% / 0.4);
+  border-radius: 6px;
+  background: hsl(8 60% 20% / 0.35);
+  backdrop-filter: blur(8px);
+  color: hsl(8 90% 86% / 0.95);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  animation: slide-in 260ms var(--ease);
+}
+
+.toast[hidden] { display: none; }
+
+/* ------------------------------------------------------------------ mobile */
+
+@media (max-width: 640px) {
+  .hud { padding: 24px 26px 0; letter-spacing: 0.24em; }
+  .frame { inset: 10px; }
+  .subtitles { min-height: 118px; padding-inline: 20px; }
+  .controls { padding-bottom: 26px; gap: 8px; }
+  .ctl { padding: 8px 13px; letter-spacing: 0.16em; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud__mark { animation: none; }
+  .log { animation: none; }
+  .toast { animation: none; }
+  .subtitle { transition-duration: 1ms; }
+}
