@@ -16,7 +16,8 @@
     "auth:oauth": "tsx scripts/get-oauth-token.ts",
     "auth:apikey": "tsx scripts/get-apikey-credentials.ts",
     "auth:session": "tsx scripts/login-browser.ts",
-    "connect:capture": "tsx scripts/connect-capture.ts"
+    "connect:capture": "tsx scripts/connect-capture.ts",
+    "connect:check": "tsx scripts/connect-check.ts"
   },
   "engines": {
     "node": ">=18.0.0"
