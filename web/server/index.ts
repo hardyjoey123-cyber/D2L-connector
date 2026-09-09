@@ -155,15 +155,33 @@ if (mcpEnabled) {
 
 function mcpServers(): Anthropic.Beta.BetaRequestMCPServerURLDefinition[] {
   if (!MCP_URL) return [];
+  // Filtering lives on the toolset below, not here: the mcp-client beta
+  // rejects tool_configuration on the server definition.
   return [
     {
       type: "url",
       name: MCP_NAME,
       url: MCP_URL,
       ...(MCP_TOKEN ? { authorization_token: MCP_TOKEN } : {}),
-      tool_configuration: { allowed_tools: MCP_READ_ONLY_TOOLS, enabled: true },
     },
   ];
+}
+
+/**
+ * Default-deny: every tool from the server is disabled, then the read-only
+ * ones are switched back on by name. A tool nobody listed cannot be called
+ * even if the server later adds it — which is the property worth having when
+ * the input is speech recognition and the account holds real money.
+ */
+function mcpToolset(): Anthropic.Beta.BetaMCPToolset {
+  return {
+    type: "mcp_toolset",
+    mcp_server_name: MCP_NAME,
+    default_config: { enabled: false },
+    configs: Object.fromEntries(
+      MCP_READ_ONLY_TOOLS.map((name) => [name, { enabled: true }])
+    ),
+  };
 }
 
 const API_KEY = process.env.ANTHROPIC_API_KEY?.trim();
@@ -391,7 +409,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
   const tools: Anthropic.Beta.BetaToolUnion[] = [];
   if (request.webSearch) tools.push(webSearchTool(request.model));
   if (useCourses && courseTools) tools.push(...courseTools.definitions);
-  if (useAccount) tools.push({ type: "mcp_toolset", mcp_server_name: MCP_NAME });
+  if (useAccount) tools.push(mcpToolset());
 
   let current: ReturnType<typeof client.beta.messages.stream> | null = null;
   // If the listener navigates away or barges in, stop paying for tokens
