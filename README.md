@@ -430,6 +430,18 @@ a connector configured elsewhere; it needs its own URL and token. The Claude API
 calls that server on the app's behalf, so no brokerage credential is ever held
 here.
 
+`npm run account:check` diagnoses the connection: whether the server is
+reachable, whether it accepts the token, and whether the tool names this project
+allows actually exist there — an allowlist of names that don't match is
+indistinguishable from having no access at all. It prints statuses, header names
+and tool names, never the token.
+
+The check calls out one situation nothing here can fix: a server whose
+`www-authenticate` challenge points at an OAuth flow. That is an interactive
+browser sign-in, and the API's MCP connector can only send a token it is handed.
+Unless the service issues a long-lived token you can paste into `.env`, it
+cannot be connected this way.
+
 **Access is read-only, and that is enforced rather than requested.** The request
 sends an `allowed_tools` list containing only read operations, which the API
 enforces server-side — a tool that is not on the list cannot be called however
