@@ -18,6 +18,7 @@ D2L Brightspace account, exposing your **courses**, **assignments**, **grades**,
 | `list_announcements`     | Lists announcements (news items) for a course. Takes `orgUnitId`.                |
 | `list_quizzes`           | Lists quizzes for a course. Takes `orgUnitId`.                                   |
 | `list_content`           | Lists a course's table of contents, including publisher links. Takes `orgUnitId`. |
+| `list_connect_assignments` | Lists McGraw-Hill Connect coursework. Needs a captured Connect session. |
 | `list_discussion_topics` | Lists discussion topics (across all forums) for a course. Takes `orgUnitId`.     |
 | `list_discussion_posts`  | Lists posts within one discussion topic. Takes `orgUnitId` and `topicId`.        |
 
@@ -374,11 +375,29 @@ clear-eyed about:
 - **It cannot be written blind.** Connect's endpoints are undocumented, so a
   parser has to be written against a real capture from a real account.
 
-`npm run connect:capture` is the first step. It opens a browser, you log into
+`npm run connect:capture` sets this up. It opens a browser, you log into
 Brightspace and click through to Connect exactly as you normally would
 (institutions that use LTI launch have no separate Connect password, which is
 why this starts at Brightspace), and it records the JSON that Connect's own web
-app fetches while you browse to your assignments.
+app fetches while you browse to your assignments. It saves the session and
+notes which page triggered the assignment fetch, so later lookups reload that
+page in the background instead of asking you to click through again.
+
+Once captured, Connect coursework appears in `list_connect_assignments` and is
+merged into the voice assistant's `get_coursework` — so "what's due this week"
+covers work that exists only in Connect.
+
+Reading it works off one endpoint, `/openapi/paam/studentAssignments`, whose
+payload is normalized: assignments, the student's copy of each, attempts,
+sections and courses arrive as five parallel lists joined by id.
+`src/tools/connect.ts` is that join and nothing else, which keeps the fragile
+part small and testable. Results are cached for fifteen minutes, and a failure
+is remembered for two so an expired session doesn't make every question wait
+out the timeout. When the session dies the error says to re-run the capture.
+
+A Brightspace outage no longer takes Connect down with it: if the course list
+can't be fetched, Connect coursework is still returned and the response says
+Brightspace was unavailable.
 
 It writes two files under `.auth/connect-capture/` (gitignored):
 

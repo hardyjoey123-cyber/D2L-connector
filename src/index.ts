@@ -11,6 +11,11 @@ import { listGrades } from "./tools/grades.js";
 import { listAnnouncements } from "./tools/announcements.js";
 import { listQuizzes } from "./tools/quizzes.js";
 import { listContentTopics } from "./tools/content.js";
+import { upcomingOnly } from "./tools/connect.js";
+import {
+  connectSessionAvailable,
+  fetchConnectAssignments,
+} from "./tools/connect-session.js";
 import { listDiscussionTopics, listDiscussionPosts } from "./tools/discussions.js";
 
 const config = loadConfig();
@@ -101,6 +106,39 @@ server.registerTool(
     try {
       const topics = await listContentTopics(client, orgUnitId);
       return toResult({ orgUnitId, count: topics.length, topics });
+    } catch (error) {
+      return toErrorResult(error);
+    }
+  }
+);
+
+server.registerTool(
+  "list_connect_assignments",
+  {
+    title: "List McGraw-Hill Connect assignments",
+    description:
+      "Lists coursework from McGraw-Hill Connect, including work that exists only there and " +
+      "never appears in Brightspace. Requires `npm run connect:capture` to have been run to " +
+      "save a Connect session; without one this returns an error explaining that. Connect " +
+      "has no public API, so this reads the same endpoint their web app uses and can break " +
+      "without warning.",
+    inputSchema: {
+      upcomingOnly: z
+        .boolean()
+        .optional()
+        .describe("Only unsubmitted work still due, soonest first. Defaults to true."),
+    },
+  },
+  async ({ upcomingOnly: onlyUpcoming = true }) => {
+    try {
+      if (!connectSessionAvailable()) {
+        return toErrorResult(
+          new Error("No Connect session saved. Run `npm run connect:capture` first.")
+        );
+      }
+      const all = await fetchConnectAssignments();
+      const assignments = onlyUpcoming ? upcomingOnly(all) : all;
+      return toResult({ count: assignments.length, assignments });
     } catch (error) {
       return toErrorResult(error);
     }

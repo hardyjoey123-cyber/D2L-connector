@@ -186,6 +186,25 @@ async function main() {
   const summaryPath = path.join(outDir, "summary.json");
   fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
 
+  // Record a page that triggered the assignment fetch, so later runs can
+  // reload it with the saved session instead of asking you to click through
+  // Brightspace again.
+  const assignmentsCall = captures.find((capture) =>
+    /\/openapi\/paam\/studentAssignments/.test(capture.url)
+  );
+  const replayUrl = visited.find((url) => /newconnect\./i.test(url)) ?? visited[0];
+  fs.writeFileSync(
+    path.resolve(".auth/connect-endpoint.json"),
+    JSON.stringify({ replayUrl, assignmentsUrl: assignmentsCall?.url ?? null }, null, 2)
+  );
+
+  if (!assignmentsCall) {
+    console.warn(
+      "\nWarning: no studentAssignments response was seen. Coursework lookups may not\n" +
+        "work. Re-run and make sure you open the page listing your assignments.\n"
+    );
+  }
+
   console.log(`\nCaptured ${captures.length} responses from Connect.`);
   console.log(`Full data (contains your personal information): ${path.join(outDir, "captures.json")}`);
   console.log(`Shareable summary (structure only, no values): ${summaryPath}\n`);

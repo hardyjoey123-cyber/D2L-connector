@@ -21,6 +21,11 @@ import { listGrades } from "../../src/tools/grades.js";
 import { listAnnouncements } from "../../src/tools/announcements.js";
 import { listQuizzes } from "../../src/tools/quizzes.js";
 import { listContentTopics } from "../../src/tools/content.js";
+import { upcomingOnly, type ConnectAssignment } from "../../src/tools/connect.js";
+import {
+  connectSessionAvailable,
+  fetchConnectAssignments,
+} from "../../src/tools/connect-session.js";
 
 /** Courses rarely change mid-conversation, and every lookup needs them. */
 const COURSE_CACHE_MS = 5 * 60 * 1000;
@@ -109,11 +114,12 @@ export function createCourseTools(): CourseTools | null {
     {
       name: "get_coursework",
       description:
-        "Lists coursework with due dates: Brightspace assignments and quizzes, plus work " +
-        "hosted on a publisher platform (McGraw-Hill Connect, Pearson MyLab, WileyPLUS, " +
-        "Cengage) that the course links out to. Use for anything about what is due, upcoming " +
-        "work, deadlines, or homework. Omit `course` to cover every active course, which is " +
-        "what a question like 'what's due this week' needs.",
+        "Lists coursework with due dates from every source: Brightspace assignments and " +
+        "quizzes, publisher work the course links out to, and — when a Connect session has " +
+        "been captured — homework that lives in McGraw-Hill Connect and is not in " +
+        "Brightspace at all. Use for anything about what is due, upcoming work, deadlines, " +
+        "or homework. Omit `course` to cover everything, which is what a question like " +
+        "'what's due this week' needs.",
       input_schema: {
         type: "object",
         properties: {
@@ -164,9 +170,22 @@ export function createCourseTools(): CourseTools | null {
       };
     }
 
-    const selected = await resolve(input.course);
-    if ("ambiguous" in selected) {
-      return { needsClarification: "Several courses match. Ask which one.", options: selected.ambiguous };
+    // A Brightspace outage must not take Connect down with it: for a student
+    // whose homework lives in Connect, that is the entire answer.
+    let selected: CourseSummary[] = [];
+    let brightspaceNote: string | null = null;
+    try {
+      const resolved = await resolve(input.course);
+      if ("ambiguous" in resolved) {
+        return {
+          needsClarification: "Several courses match. Ask which one.",
+          options: resolved.ambiguous,
+        };
+      }
+      selected = resolved;
+    } catch (error) {
+      brightspaceNote = error instanceof Error ? error.message : String(error);
+      console.warn("Brightspace course lookup failed:", brightspaceNote);
     }
 
     switch (name) {
@@ -219,12 +238,49 @@ export function createCourseTools(): CourseTools | null {
           .sort((a, b) => (Date.parse(a.due ?? "") || Infinity) - (Date.parse(b.due ?? "") || Infinity))
           .slice(0, MAX_ITEMS);
 
-        return { today: new Date().toISOString(), coursework: items };
+        // Connect is account-wide rather than per Brightspace course, so it is
+        // fetched once and filtered by name afterwards.
+        let connect: ConnectAssignment[] = [];
+        let connectNote: string | null = null;
+        if (connectSessionAvailable()) {
+          try {
+            connect = await fetchConnectAssignments();
+          } catch (error) {
+            connectNote = error instanceof Error ? error.message : String(error);
+          }
+        }
+
+        const query = typeof input.course === "string" ? normalize(input.course) : null;
+        const connectItems = (includePast ? connect : upcomingOnly(connect, now))
+          .filter((item) => {
+            if (!query) return true;
+            const haystack = normalize(`${item.course ?? ""} ${item.section ?? ""}`);
+            return haystack.includes(query) || query.includes(haystack);
+          })
+          .slice(0, MAX_ITEMS)
+          .map((item) => ({
+            course: item.course ?? item.section ?? "Connect",
+            title: item.title,
+            kind: "connect",
+            due: item.dueDate,
+          }));
+
+        const coursework = [...items, ...connectItems].sort(
+          (a, b) => (Date.parse(a.due ?? "") || Infinity) - (Date.parse(b.due ?? "") || Infinity)
+        );
+
+        return {
+          today: new Date().toISOString(),
+          coursework,
+          ...(connectNote ? { connectUnavailable: connectNote } : {}),
+          ...(brightspaceNote ? { brightspaceUnavailable: brightspaceNote } : {}),
+        };
       }
 
       case "get_grades": {
         const perCourse = await forEachCourse(selected, (course) => listGrades(client, course.id));
         return {
+          ...(brightspaceNote ? { brightspaceUnavailable: brightspaceNote } : {}),
           grades: perCourse.map(({ course, items }) => ({
             course,
             items: items
@@ -247,6 +303,7 @@ export function createCourseTools(): CourseTools | null {
           listAnnouncements(client, course.id)
         );
         return {
+          ...(brightspaceNote ? { brightspaceUnavailable: brightspaceNote } : {}),
           announcements: perCourse.flatMap(({ course, items }) =>
             items
               .filter((a) => a.isPublished !== false)
