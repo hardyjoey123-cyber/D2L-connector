@@ -197,9 +197,19 @@ export function createCourseTools(): CourseTools | null {
           // The content table of contents is fetched alongside the native
           // endpoints because publisher homework only exists there — it is a
           // launch link, not a dropbox or a quiz.
+          // Each source fails independently. Sharing one rejection would let a
+          // single broken endpoint discard the other two — which is exactly
+          // what happened when the quizzes endpoint returned an unexpected
+          // shape and took the assignments down with it.
           const [assignments, quizzes, content] = await Promise.all([
-            listAssignments(client, course.id),
-            listQuizzes(client, course.id),
+            listAssignments(client, course.id).catch((error) => {
+              console.warn(`assignments failed for ${course.name}:`, error);
+              return [];
+            }),
+            listQuizzes(client, course.id).catch((error) => {
+              console.warn(`quizzes failed for ${course.name}:`, error);
+              return [];
+            }),
             listContentTopics(client, course.id).catch(() => []),
           ]);
 

@@ -1,4 +1,4 @@
-import type { D2LClient } from "../d2lClient.js";
+import { toList, type D2LClient } from "../d2lClient.js";
 
 interface GradeObject {
   Id: number;
@@ -38,8 +38,13 @@ export interface GradeSummary {
  */
 export async function listGrades(client: D2LClient, orgUnitId: number): Promise<GradeSummary[]> {
   const [definitions, values] = await Promise.all([
-    client.leGet<GradeObject[]>(`/${orgUnitId}/grades/`).catch(() => [] as GradeObject[]),
-    client.leGet<GradeValue[]>(`/${orgUnitId}/grades/values/myGradeValues/`),
+    client
+      .leGet<unknown>(`/${orgUnitId}/grades/`)
+      .then((payload) => toList<GradeObject>(payload))
+      .catch(() => [] as GradeObject[]),
+    client
+      .leGet<unknown>(`/${orgUnitId}/grades/values/myGradeValues/`)
+      .then((payload) => toList<GradeValue>(payload)),
   ]);
 
   const definitionById = new Map(definitions.map((d) => [String(d.Id), d]));

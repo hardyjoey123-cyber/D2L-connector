@@ -1,4 +1,4 @@
-import type { D2LClient } from "../d2lClient.js";
+import { toList, type D2LClient } from "../d2lClient.js";
 
 interface RichText {
   Text?: string;
@@ -60,12 +60,15 @@ export async function listDiscussionTopics(
   client: D2LClient,
   orgUnitId: number
 ): Promise<DiscussionTopicSummary[]> {
-  const forums = await client.leGet<Forum[]>(`/${orgUnitId}/discussions/forums/`);
+  const forums = toList<Forum>(
+    await client.leGet<unknown>(`/${orgUnitId}/discussions/forums/`)
+  );
 
   const topicsByForum = await Promise.all(
     forums.map((forum) =>
       client
-        .leGet<Topic[]>(`/${orgUnitId}/discussions/forums/${forum.ForumId}/topics/`)
+        .leGet<unknown>(`/${orgUnitId}/discussions/forums/${forum.ForumId}/topics/`)
+        .then((payload) => toList<Topic>(payload))
         .then((topics) => topics.map((topic) => ({ forum, topic })))
     )
   );
@@ -88,7 +91,9 @@ export async function listDiscussionPosts(
   orgUnitId: number,
   topicId: number
 ): Promise<DiscussionPostSummary[]> {
-  const posts = await client.leGet<Post[]>(`/${orgUnitId}/discussions/topics/${topicId}/posts/`);
+  const posts = toList<Post>(
+    await client.leGet<unknown>(`/${orgUnitId}/discussions/topics/${topicId}/posts/`)
+  );
 
   return posts
     .filter((post) => !post.IsDeleted)

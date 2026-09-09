@@ -1,4 +1,4 @@
-import type { D2LClient } from "../d2lClient.js";
+import { toList, type D2LClient } from "../d2lClient.js";
 
 interface RichText {
   Text?: string;
@@ -34,7 +34,9 @@ export async function listAssignments(
   client: D2LClient,
   orgUnitId: number
 ): Promise<AssignmentSummary[]> {
-  const folders = await client.leGet<DropboxFolder[]>(`/${orgUnitId}/dropbox/folders/`);
+  const folders = toList<DropboxFolder>(
+    await client.leGet<unknown>(`/${orgUnitId}/dropbox/folders/`)
+  );
 
   return folders.map((folder) => ({
     id: folder.Id,

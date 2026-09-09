@@ -1,4 +1,4 @@
-import type { D2LClient } from "../d2lClient.js";
+import { toList, type D2LClient } from "../d2lClient.js";
 
 interface RichText {
   Text?: string;
@@ -31,7 +31,7 @@ export interface QuizSummary {
 
 /** Lists quizzes for a given course/org unit. */
 export async function listQuizzes(client: D2LClient, orgUnitId: number): Promise<QuizSummary[]> {
-  const quizzes = await client.leGet<Quiz[]>(`/${orgUnitId}/quizzes/`);
+  const quizzes = toList<Quiz>(await client.leGet<unknown>(`/${orgUnitId}/quizzes/`));
 
   return quizzes.map((quiz) => ({
     id: quiz.QuizId,

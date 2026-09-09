@@ -1,4 +1,4 @@
-import type { D2LClient } from "../d2lClient.js";
+import { toList, type D2LClient } from "../d2lClient.js";
 
 interface RichText {
   Text?: string;
@@ -30,7 +30,7 @@ export async function listAnnouncements(
   client: D2LClient,
   orgUnitId: number
 ): Promise<AnnouncementSummary[]> {
-  const items = await client.leGet<NewsItem[]>(`/${orgUnitId}/news/`);
+  const items = toList<NewsItem>(await client.leGet<unknown>(`/${orgUnitId}/news/`));
 
   return items.map((item) => ({
     id: item.Id,

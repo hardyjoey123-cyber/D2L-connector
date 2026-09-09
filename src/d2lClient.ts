@@ -8,6 +8,28 @@ interface ProductVersions {
 }
 
 /** Thrown for non-2xx responses from Brightspace, carrying status for callers to inspect. */
+
+/**
+ * Normalizes a Brightspace collection response.
+ *
+ * Some endpoints return a bare array and others wrap the same data in a paged
+ * envelope ({ Objects: [...] } or { Items: [...] }), and which you get varies
+ * by endpoint and by the API version an institution runs. Assuming an array
+ * turns that difference into a TypeError that takes the whole lookup down —
+ * observed live, where the quizzes endpoint returned an envelope and the
+ * failure also discarded the assignments fetched alongside it.
+ */
+export function toList<TItem>(payload: unknown): TItem[] {
+  if (Array.isArray(payload)) return payload as TItem[];
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    for (const key of ["Objects", "Items"]) {
+      if (Array.isArray(record[key])) return record[key] as TItem[];
+    }
+  }
+  return [];
+}
+
 export class D2LApiError extends Error {
   constructor(
     public readonly status: number,
