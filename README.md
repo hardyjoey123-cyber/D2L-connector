@@ -355,6 +355,43 @@ An ambiguous course name comes back as a list of candidates rather than a
 guess, so it asks which one you meant. A single course failing to load doesn't
 sink the whole answer.
 
+## Publisher platforms (McGraw-Hill Connect and similar)
+
+Some instructors put every assignment in Connect, MyLab or WileyPLUS and link
+nothing in Brightspace. When that happens there is nothing on the Brightspace
+side to read, and `get_coursework` will correctly report that the course has
+no upcoming work — the work exists, just not anywhere this can see.
+
+Reading the publisher directly is a different proposition, and worth being
+clear-eyed about:
+
+- **There is no public API.** Connect is read by replaying a logged-in browser
+  session, the same workaround used for Brightspace above.
+- **It breaks.** The publisher can change their site at any time, and nothing
+  here is a supported integration.
+- **It is likely against the publisher's terms of use.** This is your own
+  coursework and the access is read-only, but that is the situation.
+- **It cannot be written blind.** Connect's endpoints are undocumented, so a
+  parser has to be written against a real capture from a real account.
+
+`npm run connect:capture` is the first step. It opens a browser, you log into
+Brightspace and click through to Connect exactly as you normally would
+(institutions that use LTI launch have no separate Connect password, which is
+why this starts at Brightspace), and it records the JSON that Connect's own web
+app fetches while you browse to your assignments.
+
+It writes two files under `.auth/connect-capture/` (gitignored):
+
+| File | Contents | Safe to share |
+| --- | --- | --- |
+| `captures.json` | The full responses — your name, email, scores | **No** |
+| `summary.json` | URLs and response *shape*: key names and value types only | Yes |
+
+The summary deliberately never contains a value. `{"firstName": "Joey"}`
+appears as `{"firstName": "string"}`, which is enough to write a parser against
+and reveals nothing about you. Set `CONNECT_CAPTURE_HOSTS` to a regex to point
+the same capture at Pearson, WileyPLUS or Cengage instead.
+
 ## Settings
 
 Most of what you'd want to change lives in the **Settings** panel in the app
