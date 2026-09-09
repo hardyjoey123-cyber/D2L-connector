@@ -9,14 +9,25 @@
 
 export const BANDS = 96;
 
-/** Hue per mode, kept in step with the body classes in styles.css. */
+/**
+ * Hue shift per mode, relative to the user's chosen accent, kept in step with
+ * the body classes in styles.css. Error is absolute: a fault has to read as a
+ * fault whatever accent someone picked.
+ */
 export const MODES = {
-  idle: { hue: 190, className: "is-idle" },
-  listening: { hue: 186, className: "is-listening" },
-  thinking: { hue: 205, className: "is-thinking" },
-  speaking: { hue: 178, className: "is-speaking" },
-  error: { hue: 8, className: "is-error" },
+  idle: { delta: 0, className: "is-idle" },
+  listening: { delta: -4, className: "is-listening" },
+  thinking: { delta: 15, className: "is-thinking" },
+  speaking: { delta: -12, className: "is-speaking" },
+  error: { absolute: 8, className: "is-error" },
 };
+
+export const DEFAULT_HUE = 190;
+
+function resolveHue(baseHue, mode) {
+  const spec = MODES[mode] ?? MODES.idle;
+  return spec.absolute ?? (baseHue + spec.delta + 360) % 360;
+}
 
 /** Cheap smooth noise: interpolated hash, good enough for organic motion. */
 function hash(n) {
@@ -34,7 +45,8 @@ function noise(x) {
 export class Signal {
   constructor() {
     this.mode = "idle";
-    this.hue = MODES.idle.hue;
+    this.baseHue = DEFAULT_HUE;
+    this.hue = DEFAULT_HUE;
     /** Smoothed spectrum the renderers draw. */
     this.bands = new Float32Array(BANDS);
     /** Overall energy, 0…1. */
@@ -53,7 +65,13 @@ export class Signal {
   setMode(mode) {
     if (!(mode in MODES)) throw new Error(`Unknown mode: ${mode}`);
     this.mode = mode;
-    this.hue = MODES[mode].hue;
+    this.hue = resolveHue(this.baseHue, mode);
+  }
+
+  /** Re-tints everything to a new accent, keeping the current mode's shift. */
+  setBaseHue(hue) {
+    this.baseHue = hue;
+    this.hue = resolveHue(hue, this.mode);
   }
 
   /** Attach a live spectrum source (the microphone analyser). */

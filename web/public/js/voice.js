@@ -21,24 +21,79 @@ const PREFERRED_VOICES = [
   "Serena",
 ];
 
+/**
+ * Normalizes speech for wake-phrase matching. Recognition output varies in
+ * punctuation and casing between utterances, so both sides are flattened
+ * before comparison.
+ */
+function normalize(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Looks for the wake phrase in a running transcript.
+ *
+ * Returns null when it isn't there, otherwise the words spoken after the last
+ * occurrence — so "Jarvis, what's the weather" wakes and asks in one breath,
+ * while a bare "Jarvis" just wakes and waits.
+ *
+ * @returns {{trailing: string} | null}
+ */
+export function matchWake(transcript, phrase) {
+  const haystack = normalize(transcript);
+  const needle = normalize(phrase);
+  if (!needle) return null;
+
+  // Word-boundary match, so "jarvis" doesn't fire inside another word.
+  const pattern = new RegExp(`(?:^|\\s)${escapeRegex(needle)}(?:\\s|$)`, "g");
+  let last = null;
+  let match;
+  while ((match = pattern.exec(haystack)) !== null) {
+    last = match;
+    // The trailing separator may be the next word's leading space, so step
+    // back one to allow back-to-back matches.
+    pattern.lastIndex = Math.max(pattern.lastIndex - 1, match.index + 1);
+  }
+  if (!last) return null;
+
+  const after = haystack.slice(last.index + last[0].length).trim();
+  return { trailing: after };
+}
+
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export class Listener {
   constructor() {
     this.supported = Boolean(SpeechRecognitionImpl);
     this.listening = false;
+    /** "command" while capturing a request, "wake" while waiting to be called. */
+    this.mode = null;
+    this.wakePhrase = "jarvis";
     this.onInterim = () => {};
     this.onFinal = () => {};
+    this.onWake = () => {};
     this.onError = () => {};
     this.onEnd = () => {};
 
     if (!this.supported) return;
 
     const recognition = new SpeechRecognitionImpl();
-    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = navigator.language || "en-US";
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event) => {
+      if (this.mode === "wake") {
+        this._handleWakeResult(event);
+        return;
+      }
+
       let interim = "";
       let final = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -70,26 +125,57 @@ export class Listener {
 
     recognition.onend = () => {
       this.listening = false;
+      const mode = this.mode;
+      this.mode = null;
       const final = this._final;
       this._final = null;
       // abort() is caller-initiated, so the caller already knows the session
       // is over and must not be told again as if the user had gone quiet.
       const suppressed = this._suppressEnd;
       this._suppressEnd = false;
-      if (!suppressed) this.onEnd(final);
+      if (!suppressed) this.onEnd(final, mode);
     };
 
     this._recognition = recognition;
     this._final = null;
     this._suppressEnd = false;
+    this._heard = "";
   }
 
-  start() {
+  /**
+   * Scans the whole session transcript rather than just the new results: the
+   * wake phrase can straddle the boundary between two interim results.
+   */
+  _handleWakeResult(event) {
+    let transcript = "";
+    for (let i = 0; i < event.results.length; i++) {
+      transcript += `${event.results[i][0].transcript} `;
+    }
+    this._heard = transcript;
+
+    const hit = matchWake(transcript, this.wakePhrase);
+    if (!hit) return;
+
+    // Stop before handing off, so the command recognizer isn't fighting this
+    // one for the microphone.
+    this.abort();
+    this.onWake(hit.trailing);
+  }
+
+  /**
+   * @param {"command"|"wake"} mode - "wake" listens continuously for the wake
+   *   phrase and reports nothing else; "command" captures a single utterance.
+   */
+  start(mode = "command") {
     if (!this.supported || this.listening) return false;
     this._final = null;
+    this._heard = "";
     // Clear a suppression that was never consumed, e.g. abort() on a session
     // that had already ended and so never fired onend again.
     this._suppressEnd = false;
+    this.mode = mode;
+    // continuous must be set before start() to take effect for this session.
+    this._recognition.continuous = mode === "wake";
     try {
       this._recognition.start();
       this.listening = true;
@@ -97,6 +183,7 @@ export class Listener {
     } catch {
       // start() throws if the engine hasn't finished tearing down the previous
       // session yet; the caller can simply try again.
+      this.mode = null;
       return false;
     }
   }
@@ -110,6 +197,7 @@ export class Listener {
     if (!this.supported) return;
     this._suppressEnd = true;
     this.listening = false;
+    this.mode = null;
     try {
       this._recognition.abort();
     } catch {
@@ -137,16 +225,52 @@ export class Speaker {
     this._voice = null;
     this._keepAlive = null;
     this._unlocked = false;
+    /** Empty means "pick the best available automatically". */
+    this._preferredName = "";
+    this.rate = 1.02;
 
     if (!this.supported) return;
     this._loadVoice();
     window.speechSynthesis.addEventListener?.("voiceschanged", () => this._loadVoice());
   }
 
+  /** Voices the settings panel can offer, once the browser has loaded them. */
+  voices() {
+    return this.supported ? window.speechSynthesis.getVoices() : [];
+  }
+
+  /** "" restores automatic selection. */
+  setVoiceByName(name) {
+    this._preferredName = name || "";
+    this._loadVoice();
+  }
+
+  setRate(rate) {
+    this.rate = Math.min(2, Math.max(0.5, Number(rate) || 1));
+  }
+
+  /** Speaks a sample immediately, outside the turn queue. */
+  preview(text) {
+    if (!this.supported) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    if (this._voice) {
+      utterance.voice = this._voice;
+      utterance.lang = this._voice.lang;
+    }
+    utterance.rate = this.rate;
+    utterance.pitch = 0.92;
+    window.speechSynthesis.speak(utterance);
+  }
+
   _loadVoice() {
-    const voices = window.speechSynthesis.getVoices();
+    const voices = this.voices();
     if (voices.length === 0) return; // fires again via voiceschanged
+    const chosen = this._preferredName
+      ? voices.find((v) => v.name === this._preferredName)
+      : null;
     this._voice =
+      chosen ??
       PREFERRED_VOICES.map((name) => voices.find((v) => v.name === name)).find(Boolean) ??
       voices.find((v) => v.lang === "en-GB") ??
       voices.find((v) => v.lang?.startsWith("en")) ??
@@ -239,7 +363,7 @@ export class Speaker {
       utterance.voice = this._voice;
       utterance.lang = this._voice.lang;
     }
-    utterance.rate = 1.02;
+    utterance.rate = this.rate;
     utterance.pitch = 0.92;
 
     // Word boundaries are the only timing information the API exposes, so

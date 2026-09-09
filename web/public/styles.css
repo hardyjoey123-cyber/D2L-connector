@@ -7,6 +7,12 @@
 
 /* Registered so state changes interpolate rather than snap. Browsers without
    @property still get the colors, just without the crossfade. */
+@property --accent-base {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 190;
+}
+
 @property --accent {
   syntax: "<number>";
   inherits: true;
@@ -21,7 +27,9 @@
 
 :root {
   --void: #02060b;
-  --accent: 190;                    /* hue, degrees — shifted per state */
+  /* Set from settings by app.js; every state shifts relative to it. */
+  --accent-base: 190;
+  --accent: var(--accent-base);     /* hue, degrees — shifted per state */
   --accent-color: hsl(var(--accent) 95% 62%);
   --accent-soft: hsl(var(--accent) 90% 70% / 0.55);
   --accent-faint: hsl(var(--accent) 85% 70% / 0.14);
@@ -33,10 +41,12 @@
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-body.is-listening { --accent: 186; --glow: 1; }
-body.is-thinking  { --accent: 205; --glow: 0.75; }
-body.is-speaking  { --accent: 178; --glow: 0.92; }
-body.is-error     { --accent: 8;   --glow: 0.8; }
+body.is-idle      { --accent: var(--accent-base); }
+body.is-listening { --accent: calc(var(--accent-base) - 4);  --glow: 1; }
+body.is-thinking  { --accent: calc(var(--accent-base) + 15); --glow: 0.75; }
+body.is-speaking  { --accent: calc(var(--accent-base) - 12); --glow: 0.92; }
+/* Absolute: a fault reads as a fault whatever accent is chosen. */
+body.is-error     { --accent: 8; --glow: 0.8; }
 
 * { box-sizing: border-box; }
 
@@ -465,6 +475,267 @@ body.is-engaged .hint { opacity: 0; }
   text-transform: uppercase;
   color: var(--text-dim);
   opacity: 0.6;
+}
+
+/* ----------------------------------------------------------- settings panel */
+
+.panel {
+  position: fixed;
+  z-index: 6;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(400px, 90vw);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #04090f 0%, #020609 100%);
+  border-left: 1px solid hsl(var(--accent) 80% 65% / 0.2);
+  box-shadow: -30px 0 60px -30px hsl(var(--accent) 90% 40% / 0.5);
+  animation: slide-in 320ms var(--ease);
+}
+
+.panel[hidden] { display: none; }
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 22px 14px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid hsl(var(--accent) 80% 65% / 0.12);
+}
+
+.panel__close {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.panel__close:hover { color: var(--accent-color); }
+
+.panel__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 22px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--accent) 80% 60% / 0.25) transparent;
+}
+
+.panel__actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field__label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.field__input {
+  appearance: none;
+  width: 100%;
+  background: hsl(var(--accent) 70% 30% / 0.12);
+  border: 1px solid hsl(var(--accent) 80% 65% / 0.22);
+  border-radius: 6px;
+  padding: 9px 11px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+}
+
+.field__input:focus {
+  outline: none;
+  border-color: hsl(var(--accent) 85% 65% / 0.6);
+}
+
+select.field__input {
+  cursor: pointer;
+  /* The native arrow is invisible on this background in some browsers. */
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 30px;
+}
+
+select.field__input option {
+  background: #04090f;
+  color: #cfe9f2;
+}
+
+.field__textarea {
+  resize: vertical;
+  line-height: 1.55;
+  font-size: 11px;
+}
+
+.field__note {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+
+.field__value {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.field__try {
+  align-self: flex-start;
+  appearance: none;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: hsl(var(--accent) 85% 72% / 0.8);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.field__try:hover { color: var(--accent-color); }
+
+.field__range {
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: hsl(var(--accent) 80% 60% / 0.25);
+  cursor: pointer;
+}
+
+.field__range::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  box-shadow: 0 0 10px hsl(var(--accent) 95% 60% / 0.8);
+  cursor: pointer;
+}
+
+.field__range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent-color);
+  cursor: pointer;
+}
+
+/* Hue slider gets the full spectrum so the choice is visible before you make it. */
+#set-hue {
+  background: linear-gradient(
+    90deg,
+    hsl(0 90% 60%), hsl(60 90% 60%), hsl(120 90% 60%),
+    hsl(180 90% 60%), hsl(240 90% 60%), hsl(300 90% 60%), hsl(360 90% 60%)
+  );
+}
+
+.swatches {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.swatch {
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid hsl(0 0% 100% / 0.18);
+  cursor: pointer;
+  transition: transform 180ms var(--ease), box-shadow 180ms var(--ease);
+}
+
+.swatch:hover { transform: scale(1.12); }
+
+.swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px #04090f, 0 0 0 3px currentColor;
+}
+
+.field--switch { gap: 6px; }
+
+.field__input[hidden],
+.field__textarea[hidden] { display: none; }
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.switch input {
+  appearance: none;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: hsl(var(--accent) 40% 40% / 0.25);
+  border: 1px solid hsl(var(--accent) 80% 65% / 0.25);
+  position: relative;
+  cursor: pointer;
+  transition: background 220ms var(--ease);
+  flex: none;
+}
+
+.switch input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: hsl(var(--accent) 30% 75% / 0.6);
+  transition: transform 220ms var(--ease), background 220ms var(--ease);
+}
+
+.switch input:checked {
+  background: hsl(var(--accent) 85% 50% / 0.5);
+}
+
+.switch input:checked::after {
+  transform: translateX(16px);
+  background: hsl(var(--accent) 100% 92%);
+}
+
+.switch input:focus-visible {
+  outline: 1px solid hsl(var(--accent) 90% 65% / 0.6);
+  outline-offset: 2px;
 }
 
 /* ------------------------------------------------------------------- toast */

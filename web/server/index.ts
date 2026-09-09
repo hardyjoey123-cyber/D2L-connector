@@ -38,8 +38,14 @@ const EFFORT = (process.env.JARVIS_EFFORT ?? "low") as
   | "xhigh"
   | "max";
 
-const DEFAULT_SYSTEM_PROMPT = `You are JARVIS, a voice-driven assistant. Every word you produce is
-spoken aloud by a speech synthesizer, never read, so write for the ear:
+/**
+ * How to write for a speech synthesizer. These rules hold whatever persona the
+ * user picks, so they live here rather than in the swappable half — a persona
+ * that reintroduces bullet points makes the assistant read them aloud as
+ * "asterisk".
+ */
+const VOICE_RULES = `Every word you produce is spoken aloud by a speech synthesizer, never
+read, so write for the ear:
 
 - Answer in one to three sentences. Stop as soon as the question is answered.
 - Plain spoken prose only. No markdown, no bullet points, no numbered lists,
@@ -48,13 +54,31 @@ spoken aloud by a speech synthesizer, never read, so write for the ear:
   "about twenty percent", "three point five kilometers", "nineteen ninety-five".
 - If something genuinely needs a long or structured answer, give the short
   spoken version and offer to go deeper.
-- Your manner is calm, precise, and lightly dry. Do not use honorifics such as
-  "sir" or "madam", and do not open with filler like "certainly" or "of course".
 - The transcript you receive comes from imperfect speech recognition. If a word
   is clearly garbled, infer what was meant rather than asking about it; ask for
   a repeat only when the meaning is genuinely unrecoverable.`;
 
-const SYSTEM_PROMPT = process.env.JARVIS_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT;
+/** The half the settings panel can replace. */
+const DEFAULT_PERSONA = `You are JARVIS, a voice-driven assistant. Your manner is calm,
+precise, and lightly dry. Do not use honorifics such as "sir" or "madam", and do not
+open with filler like "certainly" or "of course".`;
+
+const PERSONA_LIMIT = 2000;
+
+/** JARVIS_SYSTEM_PROMPT still replaces everything, persona included. */
+const SYSTEM_PROMPT_OVERRIDE = process.env.JARVIS_SYSTEM_PROMPT;
+
+function buildSystemPrompt(persona: string | undefined): string {
+  if (SYSTEM_PROMPT_OVERRIDE) return SYSTEM_PROMPT_OVERRIDE;
+  return `${persona?.trim() || DEFAULT_PERSONA}\n\n${VOICE_RULES}`;
+}
+
+/**
+ * Models the browser may ask for. An allowlist rather than a passthrough: the
+ * model name arrives from the page, and a typo should not become a confusing
+ * API error mid-conversation.
+ */
+const ALLOWED_MODELS = new Set(["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]);
 
 const API_KEY = process.env.ANTHROPIC_API_KEY?.trim();
 
@@ -152,18 +176,32 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+interface ChatRequest {
+  messages: Anthropic.MessageParam[];
+  persona?: string;
+  model: string;
+  webSearch: boolean;
+}
+
 /**
- * Accepts the browser's copy of the conversation. Anything that isn't a
- * well-formed alternating-ish user/assistant text history is rejected rather
- * than passed through to the API to fail there with a less useful message.
+ * Accepts the browser's copy of the conversation plus its settings. Anything
+ * that isn't a well-formed alternating-ish user/assistant text history is
+ * rejected rather than passed through to the API to fail there with a less
+ * useful message.
  */
-function parseMessages(raw: string): Anthropic.MessageParam[] {
+function parseChatRequest(raw: string): ChatRequest {
   const body = JSON.parse(raw) as unknown;
   if (typeof body !== "object" || body === null || !Array.isArray((body as any).messages)) {
     throw new Error("Expected a JSON body of the form { messages: [...] }");
   }
 
-  const input = (body as { messages: unknown[] }).messages;
+  const { messages: input, persona, model, webSearch } = body as {
+    messages: unknown[];
+    persona?: unknown;
+    model?: unknown;
+    webSearch?: unknown;
+  };
+
   if (input.length === 0) throw new Error("messages must not be empty");
   if (input.length > 200) throw new Error("Conversation too long");
 
@@ -185,17 +223,51 @@ function parseMessages(raw: string): Anthropic.MessageParam[] {
   if (messages[messages.length - 1].role !== "user") {
     throw new Error("Conversation must end with a user turn");
   }
-  return messages;
+
+  if (persona !== undefined && typeof persona !== "string") {
+    throw new Error("persona must be a string");
+  }
+  if (typeof persona === "string" && persona.length > PERSONA_LIMIT) {
+    throw new Error(`persona must be at most ${PERSONA_LIMIT} characters`);
+  }
+  if (model !== undefined && (typeof model !== "string" || !ALLOWED_MODELS.has(model))) {
+    throw new Error(`model must be one of: ${[...ALLOWED_MODELS].join(", ")}`);
+  }
+
+  return {
+    messages,
+    persona: persona as string | undefined,
+    model: (model as string | undefined) ?? MODEL,
+    webSearch: webSearch === true,
+  };
+}
+
+/**
+ * Newer models take the dynamically-filtered search tool; Haiku is not on that
+ * list and needs the basic variant, so the tool is chosen per model rather
+ * than declared once.
+ */
+function webSearchTool(model: string): Anthropic.ToolUnion {
+  const dynamicFiltering = new Set(["claude-opus-5", "claude-sonnet-5"]);
+  // Voice answers are short, so a couple of searches is plenty — and each one
+  // costs both money and the seconds the user spends listening to silence.
+  const max_uses = 3;
+  return dynamicFiltering.has(model)
+    ? { type: "web_search_20260209", name: "web_search", max_uses }
+    : { type: "web_search_20250305", name: "web_search", max_uses };
 }
 
 function sseSend(res: http.ServerResponse, event: unknown) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
+/** How many times a paused turn may be resumed before we give up. */
+const MAX_ROUNDS = 4;
+
 async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
-  let messages: Anthropic.MessageParam[];
+  let request: ChatRequest;
   try {
-    messages = parseMessages(await readBody(req));
+    request = parseChatRequest(await readBody(req));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     res
@@ -212,35 +284,64 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
     "x-accel-buffering": "no",
   });
 
-  const stream = client.messages.stream({
-    model: MODEL,
-    max_tokens: MAX_TOKENS,
-    output_config: { effort: EFFORT },
-    system: SYSTEM_PROMPT,
-    messages,
-  });
+  const messages = [...request.messages];
+  const system = buildSystemPrompt(request.persona);
+  const tools = request.webSearch ? [webSearchTool(request.model)] : undefined;
 
+  let current: ReturnType<typeof client.messages.stream> | null = null;
   // If the listener navigates away or barges in, stop paying for tokens
   // nobody will hear.
-  const abort = () => stream.abort();
+  const abort = () => current?.abort();
   res.on("close", abort);
 
   try {
-    for await (const event of stream) {
-      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-        sseSend(res, { type: "delta", text: event.delta.text });
+    // A server-side tool can pause the turn mid-answer; resume it until the
+    // model actually finishes rather than cutting the reply off at the search.
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      const stream = client.messages.stream({
+        model: request.model,
+        max_tokens: MAX_TOKENS,
+        output_config: { effort: EFFORT },
+        system,
+        messages,
+        ...(tools ? { tools } : {}),
+      });
+      current = stream;
+
+      for await (const event of stream) {
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          sseSend(res, { type: "delta", text: event.delta.text });
+        } else if (
+          event.type === "content_block_start" &&
+          event.content_block.type === "server_tool_use"
+        ) {
+          // Searching adds seconds of silence; tell the page so it can say so.
+          sseSend(res, { type: "status", label: "searching" });
+        }
       }
+
+      const final = await stream.finalMessage();
+
+      if (final.stop_reason === "refusal") {
+        sseSend(res, {
+          type: "error",
+          message: "That request was declined. Try asking something else.",
+        });
+        return;
+      }
+      if (final.stop_reason === "pause_turn") {
+        messages.push({ role: "assistant", content: final.content });
+        continue;
+      }
+
+      sseSend(res, { type: "done", stopReason: final.stop_reason });
+      return;
     }
 
-    const final = await stream.finalMessage();
-    if (final.stop_reason === "refusal") {
-      sseSend(res, {
-        type: "error",
-        message: "That request was declined. Try asking something else.",
-      });
-    } else {
-      sseSend(res, { type: "done", stopReason: final.stop_reason });
-    }
+    sseSend(res, {
+      type: "error",
+      message: "That needed more searching than expected. Try a narrower question.",
+    });
   } catch (error) {
     if (res.writableEnded) return;
     // The abort above is the normal path when a listener leaves mid-reply;
@@ -286,7 +387,14 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/api/health") {
     res
       .writeHead(200, { "content-type": "application/json" })
-      .end(JSON.stringify({ ok: true, model: MODEL, effort: EFFORT }));
+      .end(
+        JSON.stringify({
+          ok: true,
+          model: MODEL,
+          effort: EFFORT,
+          models: [...ALLOWED_MODELS],
+        })
+      );
     return;
   }
   if (req.method === "GET" || req.method === "HEAD") {

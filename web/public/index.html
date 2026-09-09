@@ -72,6 +72,7 @@
       <button class="ctl" id="ctl-mute" type="button" aria-pressed="false">Voice on</button>
       <button class="ctl" id="ctl-log" type="button" aria-expanded="false" aria-controls="log">Log</button>
       <button class="ctl" id="ctl-type" type="button" aria-expanded="false" aria-controls="typed-form">Type</button>
+      <button class="ctl" id="ctl-settings" type="button" aria-expanded="false" aria-controls="settings">Settings</button>
     </footer>
 
     <aside class="log" id="log" hidden aria-label="Conversation transcript">
@@ -80,6 +81,96 @@
         <button class="log__close" id="log-close" type="button" aria-label="Close transcript">×</button>
       </div>
       <div class="log__body" id="log-body"></div>
+    </aside>
+
+    <aside class="panel" id="settings" hidden aria-label="Settings">
+      <div class="panel__head">
+        <span>Settings</span>
+        <button class="panel__close" id="settings-close" type="button" aria-label="Close settings">×</button>
+      </div>
+      <div class="panel__body">
+        <section class="field">
+          <label class="field__label" for="set-name">Name</label>
+          <input class="field__input" id="set-name" type="text" maxlength="24" spellcheck="false" />
+        </section>
+
+        <section class="field">
+          <label class="field__label" for="set-hue">Accent</label>
+          <input class="field__range" id="set-hue" type="range" min="0" max="359" step="1" />
+          <div class="swatches" id="swatches"></div>
+        </section>
+
+        <section class="field">
+          <label class="field__label" for="set-persona">Personality</label>
+          <select class="field__input" id="set-persona"></select>
+          <textarea
+            class="field__input field__textarea"
+            id="set-custom-persona"
+            rows="4"
+            maxlength="2000"
+            placeholder="Describe how it should behave…"
+            hidden
+          ></textarea>
+        </section>
+
+        <section class="field">
+          <label class="field__label" for="set-voice">Voice</label>
+          <select class="field__input" id="set-voice"></select>
+          <button class="field__try" id="set-voice-try" type="button">Hear it</button>
+        </section>
+
+        <section class="field">
+          <label class="field__label" for="set-rate">Speaking rate</label>
+          <input class="field__range" id="set-rate" type="range" min="0.6" max="1.6" step="0.02" />
+          <span class="field__value" id="set-rate-value"></span>
+        </section>
+
+        <section class="field">
+          <label class="field__label" for="set-model">Model</label>
+          <select class="field__input" id="set-model"></select>
+          <p class="field__note" id="set-model-note"></p>
+        </section>
+
+        <section class="field field--switch">
+          <label class="switch">
+            <input type="checkbox" id="set-search" />
+            <span>Web search</span>
+          </label>
+          <p class="field__note">Lets it look things up. Slower, and costs a little more.</p>
+        </section>
+
+        <section class="field field--switch">
+          <label class="switch">
+            <input type="checkbox" id="set-wake" />
+            <span>Wake word</span>
+          </label>
+          <input
+            class="field__input"
+            id="set-wake-phrase"
+            type="text"
+            maxlength="24"
+            spellcheck="false"
+            placeholder="jarvis"
+          />
+          <p class="field__note">
+            Listens continuously for the phrase, so you never touch the keyboard.
+            The microphone stays on while it waits.
+          </p>
+        </section>
+
+        <section class="field field--switch">
+          <label class="switch">
+            <input type="checkbox" id="set-memory" />
+            <span>Remember conversations</span>
+          </label>
+          <p class="field__note">Kept in this browser only. Never sent anywhere but Claude.</p>
+        </section>
+
+        <div class="panel__actions">
+          <button class="ctl" id="set-forget" type="button">Forget history</button>
+          <button class="ctl" id="set-reset" type="button">Reset all</button>
+        </div>
+      </div>
     </aside>
 
     <div class="toast" id="toast" role="alert" hidden></div>

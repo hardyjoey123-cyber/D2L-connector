@@ -236,6 +236,14 @@ You speak, Claude answers, and it speaks back — no typing, no chat log to scro
   word-boundary events, so the pulse tracks the rhythm of the speech.
 - **Text stays secondary.** The last exchange appears under the visualizer in low
   contrast; the full transcript lives in a panel you open deliberately.
+- **Wake word.** Optional. Say "Jarvis" and it wakes; say "Jarvis, what's the
+  weather" and it wakes and answers in one breath, without touching anything.
+- **Web search.** Optional. It can look things up rather than answering from
+  memory alone; the status reads "Searching" while it does.
+- **It remembers.** Conversations survive closing the tab. Stored in your browser
+  only, and cleared with one button.
+- **Everything is yours to change.** A settings panel covers the name, accent
+  colour, personality, voice, speaking rate, and model — no file editing.
 
 ## Running it
 
@@ -259,6 +267,7 @@ Then open <http://127.0.0.1:8917> and click the core.
 | Mute the voice (text only) | <kbd>M</kbd>, or the **Voice** button |
 | Open the transcript | <kbd>L</kbd>, or the **Log** button |
 | Type instead of speaking | <kbd>/</kbd>, or the **Type** button |
+| Open settings | <kbd>S</kbd>, or the **Settings** button |
 | Stand down / close panels | <kbd>Esc</kbd> |
 
 ## Browser support
@@ -284,7 +293,9 @@ is served as static files.
 | `web/public/js/audio.js` | Microphone FFT, log-mapped to the visualizer's bands |
 | `web/public/js/visualizer.js` | The reactor: rings, ticks, radial waveform |
 | `web/public/js/ambient.js` | Drifting grid layers and light motes |
-| `web/public/js/voice.js` | Speech recognition and sentence-chunked synthesis |
+| `web/public/js/voice.js` | Speech recognition, wake-word matching, sentence-chunked synthesis |
+| `web/public/js/settings.js` | Persisted preferences and the persona presets |
+| `web/public/js/memory.js` | Conversation history across sessions |
 | `web/public/js/claude.js` | SSE client for the backend |
 
 **The API key never reaches the browser.** The page talks only to the local server, which
@@ -296,6 +307,30 @@ that anyone who can reach the port can spend your API credits.
 Conversation state lives entirely in the browser and is sent with each request, so the
 server is stateless and restarting it mid-conversation loses nothing. History is capped
 at the last 30 turns to bound cost and latency.
+
+## Settings
+
+Most of what you'd want to change lives in the **Settings** panel in the app
+(<kbd>S</kbd>), stored per browser:
+
+| Setting | Notes |
+| --- | --- |
+| Name and accent colour | Re-tints the whole interface, visualizer included |
+| Personality | Four presets, or write your own |
+| Voice and speaking rate | Whichever voices your OS provides |
+| Model | Opus 5 by default; Haiku is ~5× cheaper and less sharp |
+| Web search | Off means it answers from its own knowledge only |
+| Wake word | Continuous listening for a phrase you choose |
+| Remember conversations | History persists across sessions, in this browser |
+
+The persona replaces only the *manner*. The rules about writing for a speech
+synthesizer — short sentences, no markdown, spoken numbers — are enforced
+server-side on top of whatever persona is set, so a custom personality can't
+accidentally make it read asterisks aloud.
+
+A note on the wake word: it holds the microphone open continuously while it
+waits. Recognition runs through the browser's speech service, so audio leaves
+your machine the same way it does for any other voice input here.
 
 ## Tuning
 

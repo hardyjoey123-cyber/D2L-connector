@@ -5,15 +5,19 @@
 
 /**
  * Streams one assistant turn. `messages` is the full conversation so far —
- * the backend is stateless, so the browser owns the history.
+ * the backend is stateless, so the browser owns the history. The settings that
+ * shape the reply (persona, model, whether it may search) ride along with it.
  *
  * @returns {Promise<string>} the complete reply text
  */
-export async function streamReply(messages, { onDelta, abortSignal } = {}) {
+export async function streamReply(
+  messages,
+  { onDelta, onStatus, abortSignal, persona, model, webSearch } = {}
+) {
   const response = await fetch("/api/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, persona, model, webSearch }),
     signal: abortSignal,
   });
 
@@ -54,6 +58,10 @@ export async function streamReply(messages, { onDelta, abortSignal } = {}) {
       if (event.type === "delta") {
         full += event.text;
         onDelta?.(event.text, full);
+      } else if (event.type === "status") {
+        // e.g. the model went off to search; the page says so rather than
+        // sitting in silence.
+        onStatus?.(event.label);
       } else if (event.type === "error") {
         throw new Error(event.message);
       }
