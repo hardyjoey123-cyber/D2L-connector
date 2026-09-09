@@ -20,6 +20,7 @@ import { listAssignments } from "../../src/tools/assignments.js";
 import { listGrades } from "../../src/tools/grades.js";
 import { listAnnouncements } from "../../src/tools/announcements.js";
 import { listQuizzes } from "../../src/tools/quizzes.js";
+import { listContentTopics } from "../../src/tools/content.js";
 
 /** Courses rarely change mid-conversation, and every lookup needs them. */
 const COURSE_CACHE_MS = 5 * 60 * 1000;
@@ -108,9 +109,11 @@ export function createCourseTools(): CourseTools | null {
     {
       name: "get_coursework",
       description:
-        "Lists assignments and quizzes with their due dates. Use for anything about what is " +
-        "due, upcoming work, deadlines, or homework. Omit `course` to cover every active " +
-        "course, which is what a question like 'what's due this week' needs.",
+        "Lists coursework with due dates: Brightspace assignments and quizzes, plus work " +
+        "hosted on a publisher platform (McGraw-Hill Connect, Pearson MyLab, WileyPLUS, " +
+        "Cengage) that the course links out to. Use for anything about what is due, upcoming " +
+        "work, deadlines, or homework. Omit `course` to cover every active course, which is " +
+        "what a question like 'what's due this week' needs.",
       input_schema: {
         type: "object",
         properties: {
@@ -172,11 +175,16 @@ export function createCourseTools(): CourseTools | null {
         const now = Date.now();
 
         const perCourse = await forEachCourse(selected, async (course) => {
-          const [assignments, quizzes] = await Promise.all([
+          // The content table of contents is fetched alongside the native
+          // endpoints because publisher homework only exists there — it is a
+          // launch link, not a dropbox or a quiz.
+          const [assignments, quizzes, content] = await Promise.all([
             listAssignments(client, course.id),
             listQuizzes(client, course.id),
+            listContentTopics(client, course.id).catch(() => []),
           ]);
-          return [
+
+          const native = [
             ...assignments
               .filter((a) => a.isHidden !== true)
               .map((a) => ({ title: a.name, kind: "assignment", due: a.dueDate })),
@@ -184,6 +192,21 @@ export function createCourseTools(): CourseTools | null {
               .filter((q) => q.isHidden !== true)
               .map((q) => ({ title: q.name, kind: "quiz", due: q.dueDate ?? q.endDate })),
           ];
+
+          // A dropbox or quiz usually also appears as a content topic; match on
+          // title so the same piece of work isn't announced twice.
+          const seen = new Set(native.map((item) => item.title.trim().toLowerCase()));
+          const external = content
+            .filter(
+              (topic) =>
+                topic.isExternal &&
+                topic.dueDate &&
+                topic.isHidden !== true &&
+                !seen.has(topic.title.trim().toLowerCase())
+            )
+            .map((topic) => ({ title: topic.title, kind: "publisher", due: topic.dueDate }));
+
+          return [...native, ...external];
         });
 
         const items = perCourse

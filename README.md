@@ -17,12 +17,21 @@ D2L Brightspace account, exposing your **courses**, **assignments**, **grades**,
 | `list_grades`            | Lists your grade values for a course. Takes `orgUnitId`.                         |
 | `list_announcements`     | Lists announcements (news items) for a course. Takes `orgUnitId`.                |
 | `list_quizzes`           | Lists quizzes for a course. Takes `orgUnitId`.                                   |
+| `list_content`           | Lists a course's table of contents, including publisher links. Takes `orgUnitId`. |
 | `list_discussion_topics` | Lists discussion topics (across all forums) for a course. Takes `orgUnitId`.     |
 | `list_discussion_posts`  | Lists posts within one discussion topic. Takes `orgUnitId` and `topicId`.        |
 
 Note: `list_assignments` only covers Brightspace's native Dropbox folders. Coursework hosted on
-a third-party publisher platform (e.g. Connect, MyLab, WileyPLUS) that a course merely links out
-to won't appear here — that's a separate system outside Brightspace's API entirely.
+a third-party publisher platform (McGraw-Hill Connect, Pearson MyLab, WileyPLUS, Cengage) is not
+a dropbox, so it never appears there.
+
+`list_content` is how that work becomes visible. The launch link for publisher coursework almost
+always sits in the course's table of contents, carrying the due date the instructor set, and
+topics that leave Brightspace are flagged `isExternal`. What this **cannot** do is read the
+publisher's own system: your score, completion state, and any due date set inside Connect or
+MyLab rather than in Brightspace live on that company's servers, behind a separate login and
+with no public API. If an instructor never linked the work in Brightspace, nothing here will
+find it.
 
 `orgUnitId` comes from the `list_courses` result — ask Claude to list your courses first,
 then query assignments/grades/announcements for whichever course you're interested in.
@@ -250,7 +259,8 @@ You speak, Claude answers, and it speaks back — no typing, no chat log to scro
 - **Everything is yours to change.** A settings panel covers the name, accent
   colour, personality, voice, speaking rate, and model — no file editing.
 - **It knows your courses.** If Brightspace is configured (above), you can ask
-  "what's due this week?" out loud and get a real answer.
+  "what's due this week?" out loud and get a real answer — including homework
+  hosted on a textbook publisher's platform, where the course links out to it.
 
 ## Running it
 
@@ -337,7 +347,7 @@ sits through.
 | Tool | Answers |
 | --- | --- |
 | `list_courses` | "What classes am I taking?" |
-| `get_coursework` | "What's due this week?" — assignments and quizzes, soonest first |
+| `get_coursework` | "What's due this week?" — assignments, quizzes, and publisher homework, soonest first |
 | `get_grades` | "How am I doing in chemistry?" |
 | `get_announcements` | "Anything new posted?" |
 

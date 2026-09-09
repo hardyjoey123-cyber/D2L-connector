@@ -10,6 +10,7 @@ import { listAssignments } from "./tools/assignments.js";
 import { listGrades } from "./tools/grades.js";
 import { listAnnouncements } from "./tools/announcements.js";
 import { listQuizzes } from "./tools/quizzes.js";
+import { listContentTopics } from "./tools/content.js";
 import { listDiscussionTopics, listDiscussionPosts } from "./tools/discussions.js";
 
 const config = loadConfig();
@@ -72,6 +73,34 @@ server.registerTool(
     try {
       const assignments = await listAssignments(client, orgUnitId);
       return toResult({ orgUnitId, count: assignments.length, assignments });
+    } catch (error) {
+      return toErrorResult(error);
+    }
+  }
+);
+
+server.registerTool(
+  "list_content",
+  {
+    title: "List Brightspace course content",
+    description:
+      "Lists a course's table of contents, flattened to topics. Includes links that launch " +
+      "external tools, which is how coursework hosted on a publisher platform (McGraw-Hill " +
+      "Connect, Pearson MyLab, WileyPLUS, Cengage) appears — those are not dropboxes or " +
+      "quizzes, so list_assignments and list_quizzes will not show them. Topics carry the " +
+      "due date the instructor set, when one exists.",
+    inputSchema: {
+      orgUnitId: z
+        .number()
+        .int()
+        .positive()
+        .describe("The course's org unit ID, from list_courses."),
+    },
+  },
+  async ({ orgUnitId }) => {
+    try {
+      const topics = await listContentTopics(client, orgUnitId);
+      return toResult({ orgUnitId, count: topics.length, topics });
     } catch (error) {
       return toErrorResult(error);
     }
