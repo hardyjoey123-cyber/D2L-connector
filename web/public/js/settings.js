@@ -57,6 +57,8 @@ export const DEFAULTS = {
   webSearch: true,
   /** Ignored unless the server reports Brightspace is configured. */
   courses: true,
+  /** Ignored unless the server has a brokerage MCP server configured. */
+  account: true,
   wakeWord: false,
   wakePhrase: "jarvis",
   memory: true,

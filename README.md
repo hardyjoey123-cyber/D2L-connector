@@ -418,6 +418,26 @@ appears as `{"firstName": "string"}`, which is enough to write a parser against
 and reveals nothing about you. Set `CONNECT_CAPTURE_HOSTS` to a regex to point
 the same capture at Pearson, WileyPLUS or Cengage instead.
 
+## Brokerage account (read-only)
+
+The voice interface can read a brokerage account out loud — balances, positions,
+orders, quotes, news, realized P&L — when `JARVIS_MCP_URL` points at a remote MCP
+server for it. Set it in `.env` (see `.env.example`) and an **Account access**
+toggle appears in settings.
+
+The voice app is a separate program from any Claude session, so it cannot borrow
+a connector configured elsewhere; it needs its own URL and token. The Claude API
+calls that server on the app's behalf, so no brokerage credential is ever held
+here.
+
+**Access is read-only, and that is enforced rather than requested.** The request
+sends an `allowed_tools` list containing only read operations, which the API
+enforces server-side — a tool that is not on the list cannot be called however
+the conversation goes. Placing, modifying and cancelling orders are absent by
+design: speech recognition mishears words, and a misheard ticker or quantity
+would be an irreversible trade. Enabling that is a change to a trading rulebook,
+not a change to this file.
+
 ## Settings
 
 Most of what you'd want to change lives in the **Settings** panel in the app
@@ -431,6 +451,7 @@ Most of what you'd want to change lives in the **Settings** panel in the app
 | Model | Opus 5 by default; Haiku is ~5× cheaper and less sharp |
 | Web search | Off means it answers from its own knowledge only |
 | Course access | Only shown when Brightspace is configured |
+| Account access | Only shown when a brokerage MCP server is configured |
 | Wake word | Continuous listening for a phrase you choose |
 | Remember conversations | History persists across sessions, in this browser |
 

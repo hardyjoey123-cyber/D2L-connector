@@ -74,16 +74,27 @@ function todayLine(): string {
   return `Today is ${new Date().toDateString()}.`;
 }
 
+const ACCOUNT_GUIDANCE = `You can read the user's brokerage account: balances, positions,
+orders, realized profit and loss, quotes and news. This access is read-only — you cannot
+place, modify or cancel an order, and you should say so plainly if asked to trade rather
+than implying you tried. Speak numbers the way a person would: "up about four percent",
+"twelve hundred dollars", not raw decimals.`;
+
 const COURSE_GUIDANCE = `You can look up the user's Brightspace courses, coursework, grades,
 and announcements. Use those tools whenever a question touches their classes rather than
 guessing. Speak about dates the way a person would — "Thursday", "next Tuesday", "in three
 days" — not as calendar timestamps, and mention only the few most relevant items unless
 asked for the full list.`;
 
-function buildSystemPrompt(persona: string | undefined, withCourses: boolean): string {
+function buildSystemPrompt(
+  persona: string | undefined,
+  withCourses: boolean,
+  withAccount: boolean
+): string {
   if (SYSTEM_PROMPT_OVERRIDE) return SYSTEM_PROMPT_OVERRIDE;
   const parts = [persona?.trim() || DEFAULT_PERSONA, VOICE_RULES, todayLine()];
   if (withCourses) parts.push(COURSE_GUIDANCE);
+  if (withAccount) parts.push(ACCOUNT_GUIDANCE);
   return parts.join("\n\n");
 }
 
@@ -93,6 +104,67 @@ function buildSystemPrompt(persona: string | undefined, withCourses: boolean): s
  * API error mid-conversation.
  */
 const ALLOWED_MODELS = new Set(["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]);
+
+/* ------------------------------------------------------------ trading MCP */
+
+/**
+ * An optional remote MCP server, for reading a brokerage account out loud.
+ *
+ * The voice app is a separate program from any Claude session, so it cannot
+ * borrow a connector configured elsewhere — it needs its own URL and token.
+ * The API calls the server on our behalf; nothing here ever holds brokerage
+ * credentials.
+ */
+const MCP_URL = process.env.JARVIS_MCP_URL?.trim();
+const MCP_TOKEN = process.env.JARVIS_MCP_TOKEN?.trim();
+const MCP_NAME = process.env.JARVIS_MCP_NAME?.trim() || "trading";
+
+/**
+ * Read-only by construction. `allowed_tools` is enforced by the API, so a tool
+ * that is not on this list cannot be called however the conversation goes —
+ * which matters when the input is speech recognition and the account is real
+ * money. Placing or cancelling orders is deliberately absent: enabling that is
+ * a change to the trading rulebook, not a change to this file.
+ */
+const MCP_READ_ONLY_TOOLS = [
+  "get_accounts",
+  "get_portfolio",
+  "get_equity_positions",
+  "get_equity_orders",
+  "get_equity_quotes",
+  "get_equity_historicals",
+  "get_equity_fundamentals",
+  "get_equity_news",
+  "get_realized_pnl",
+  "get_pnl_trade_history",
+  "get_option_positions",
+  "get_crypto_positions",
+  "get_watchlists",
+  "get_watchlist_items",
+  "get_earnings_calendar",
+  "search",
+];
+
+const mcpEnabled = Boolean(MCP_URL);
+if (mcpEnabled) {
+  console.log(
+    `Account tools enabled (${MCP_NAME}): read-only, ${MCP_READ_ONLY_TOOLS.length} tools. ` +
+      "Placing or cancelling orders is not available."
+  );
+}
+
+function mcpServers(): Anthropic.Beta.BetaRequestMCPServerURLDefinition[] {
+  if (!MCP_URL) return [];
+  return [
+    {
+      type: "url",
+      name: MCP_NAME,
+      url: MCP_URL,
+      ...(MCP_TOKEN ? { authorization_token: MCP_TOKEN } : {}),
+      tool_configuration: { allowed_tools: MCP_READ_ONLY_TOOLS, enabled: true },
+    },
+  ];
+}
 
 const API_KEY = process.env.ANTHROPIC_API_KEY?.trim();
 
@@ -202,6 +274,7 @@ interface ChatRequest {
   model: string;
   webSearch: boolean;
   courses: boolean;
+  account: boolean;
 }
 
 /**
@@ -216,12 +289,13 @@ function parseChatRequest(raw: string): ChatRequest {
     throw new Error("Expected a JSON body of the form { messages: [...] }");
   }
 
-  const { messages: input, persona, model, webSearch, courses } = body as {
+  const { messages: input, persona, model, webSearch, courses, account } = body as {
     messages: unknown[];
     persona?: unknown;
     model?: unknown;
     webSearch?: unknown;
     courses?: unknown;
+    account?: unknown;
   };
 
   if (input.length === 0) throw new Error("messages must not be empty");
@@ -263,6 +337,7 @@ function parseChatRequest(raw: string): ChatRequest {
     webSearch: webSearch === true,
     // Only honoured when Brightspace is actually configured.
     courses: courses !== false && courseTools !== null,
+    account: account !== false && mcpEnabled,
   };
 }
 
@@ -308,15 +383,17 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
     "x-accel-buffering": "no",
   });
 
-  const messages: Anthropic.MessageParam[] = [...request.messages];
+  const messages: Anthropic.Beta.BetaMessageParam[] = [...request.messages];
   const useCourses = request.courses && courseTools !== null;
-  const system = buildSystemPrompt(request.persona, useCourses);
+  const useAccount = request.account && mcpEnabled;
+  const system = buildSystemPrompt(request.persona, useCourses, useAccount);
 
-  const tools: Anthropic.ToolUnion[] = [];
+  const tools: Anthropic.Beta.BetaToolUnion[] = [];
   if (request.webSearch) tools.push(webSearchTool(request.model));
   if (useCourses && courseTools) tools.push(...courseTools.definitions);
+  if (useAccount) tools.push({ type: "mcp_toolset", mcp_server_name: MCP_NAME });
 
-  let current: ReturnType<typeof client.messages.stream> | null = null;
+  let current: ReturnType<typeof client.beta.messages.stream> | null = null;
   // If the listener navigates away or barges in, stop paying for tokens
   // nobody will hear.
   const abort = () => current?.abort();
@@ -326,13 +403,18 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
     // A server-side tool can pause the turn mid-answer; resume it until the
     // model actually finishes rather than cutting the reply off at the search.
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      const stream = client.messages.stream({
+      // The beta endpoint throughout: it is a superset, and the MCP connector
+      // only exists there.
+      const stream = client.beta.messages.stream({
         model: request.model,
         max_tokens: MAX_TOKENS,
         output_config: { effort: EFFORT },
         system,
         messages,
         ...(tools.length ? { tools } : {}),
+        ...(useAccount
+          ? { mcp_servers: mcpServers(), betas: ["mcp-client-2025-11-20"] }
+          : {}),
       });
       current = stream;
 
@@ -368,7 +450,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       // not enable must never run, whatever the model asks for.
       if (final.stop_reason === "tool_use" && useCourses && courseTools) {
         const calls = final.content.filter(
-          (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
+          (block): block is Anthropic.Beta.BetaToolUseBlock => block.type === "tool_use"
         );
         if (calls.length === 0) {
           sseSend(res, { type: "done", stopReason: final.stop_reason });
@@ -378,7 +460,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
         sseSend(res, { type: "status", label: "courses" });
         // Run them together: several courses in one question is the normal case.
         const results = await Promise.all(
-          calls.map(async (call): Promise<Anthropic.ToolResultBlockParam> => {
+          calls.map(async (call): Promise<Anthropic.Beta.BetaToolResultBlockParam> => {
             try {
               const output = await courseTools.run(
                 call.name,
@@ -469,6 +551,7 @@ const server = http.createServer((req, res) => {
           effort: EFFORT,
           models: [...ALLOWED_MODELS],
           courses: courseTools !== null,
+          account: mcpEnabled,
         })
       );
     return;

@@ -62,6 +62,8 @@ const el = {
   setModel: document.getElementById("set-model"),
   setModelNote: document.getElementById("set-model-note"),
   setSearch: document.getElementById("set-search"),
+  fieldAccount: document.getElementById("field-account"),
+  setAccount: document.getElementById("set-account"),
   fieldCourses: document.getElementById("field-courses"),
   setCourses: document.getElementById("set-courses"),
   coursesNote: document.getElementById("courses-note"),
@@ -99,7 +101,7 @@ const state = {
 };
 
 /** What the backend says it can do, filled in at boot. */
-const backend = { courses: false };
+const backend = { courses: false, account: false };
 
 /** Pending re-arm of the recognizer, so repeated calls can't stack timers. */
 let listenRetry = null;
@@ -363,6 +365,7 @@ async function send(text) {
       model: settings.get("model"),
       webSearch: settings.get("webSearch"),
       courses: backend.courses && settings.get("courses"),
+      account: backend.account && settings.get("account"),
       onStatus: (label) => {
         // The pause before an answer is much easier to sit through when the
         // interface says what it's doing.
@@ -603,6 +606,7 @@ function buildSettingsPanel() {
   });
   bind(el.setSearch, "change", () => settings.update({ webSearch: el.setSearch.checked }));
   bind(el.setCourses, "change", () => settings.update({ courses: el.setCourses.checked }));
+  bind(el.setAccount, "change", () => settings.update({ account: el.setAccount.checked }));
   bind(el.setWake, "change", () => {
     settings.update({ wakeWord: el.setWake.checked });
     if (el.setWake.checked) startWaking();
@@ -657,6 +661,7 @@ function syncSettingsForm() {
   el.setWakePhrase.value = values.wakePhrase;
   el.setMemory.checked = values.memory;
   el.setCourses.checked = values.courses;
+  el.setAccount.checked = values.account;
   el.setWakePhrase.hidden = !values.wakeWord;
   syncSwatches();
 
@@ -706,6 +711,7 @@ async function boot() {
     const health = await fetch("/api/health").then((r) => r.json());
     if (Array.isArray(health.models) && health.models.length) models = health.models;
     backend.courses = health.courses === true;
+    backend.account = health.account === true;
   } catch {
     el.modelReadout.textContent = "◦ offline";
     toast("Backend unreachable. Start it with: npm run jarvis");
@@ -716,6 +722,7 @@ async function boot() {
 
   // The toggle only appears when the server actually has Brightspace wired up;
   // offering a switch that can't do anything is worse than offering none.
+  el.fieldAccount.hidden = !backend.account;
   el.fieldCourses.hidden = !backend.courses;
   el.coursesNote.textContent = backend.courses
     ? "Lets it read your Brightspace courses, coursework, grades, and announcements."
