@@ -18,7 +18,8 @@
     "auth:session": "tsx scripts/login-browser.ts",
     "connect:capture": "tsx scripts/connect-capture.ts",
     "connect:check": "tsx scripts/connect-check.ts",
-    "account:check": "tsx scripts/account-check.ts"
+    "account:check": "tsx scripts/account-check.ts",
+    "account:login": "tsx scripts/account-login.ts"
   },
   "engines": {
     "node": ">=18.0.0"

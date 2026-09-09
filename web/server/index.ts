@@ -15,6 +15,11 @@ import Anthropic from "@anthropic-ai/sdk";
 
 import { projectRoot } from "../../src/config.js";
 import { createCourseTools } from "./courses.js";
+import {
+  accountSessionAvailable,
+  currentAccessToken,
+  AccountSessionError,
+} from "../../src/tools/account-session.js";
 
 const PUBLIC_DIR = path.join(projectRoot, "web", "public");
 
@@ -151,9 +156,12 @@ if (mcpEnabled) {
     `Account tools enabled (${MCP_NAME}): read-only, ${MCP_READ_ONLY_TOOLS.length} tools. ` +
       "Placing or cancelling orders is not available."
   );
+  if (!accountSessionAvailable() && !MCP_TOKEN) {
+    console.log("  No account sign-in saved yet — run `npm run account:login`.");
+  }
 }
 
-function mcpServers(): Anthropic.Beta.BetaRequestMCPServerURLDefinition[] {
+function mcpServers(token: string | undefined): Anthropic.Beta.BetaRequestMCPServerURLDefinition[] {
   if (!MCP_URL) return [];
   // Filtering lives on the toolset below, not here: the mcp-client beta
   // rejects tool_configuration on the server definition.
@@ -162,9 +170,18 @@ function mcpServers(): Anthropic.Beta.BetaRequestMCPServerURLDefinition[] {
       type: "url",
       name: MCP_NAME,
       url: MCP_URL,
-      ...(MCP_TOKEN ? { authorization_token: MCP_TOKEN } : {}),
+      ...(token ? { authorization_token: token } : {}),
     },
   ];
+}
+
+/**
+ * A token for this turn. Prefers a signed-in session (which refreshes itself)
+ * and falls back to a static one from .env for servers that issue those.
+ */
+async function accountToken(): Promise<string | undefined> {
+  if (accountSessionAvailable()) return currentAccessToken();
+  return MCP_TOKEN;
 }
 
 /**
@@ -403,8 +420,24 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
 
   const messages: Anthropic.Beta.BetaMessageParam[] = [...request.messages];
   const useCourses = request.courses && courseTools !== null;
-  const useAccount = request.account && mcpEnabled;
+  let useAccount = request.account && mcpEnabled;
   const system = buildSystemPrompt(request.persona, useCourses, useAccount);
+
+  // Resolved once per turn rather than per round, and a failure here disables
+  // the account rather than failing the whole answer — the rest of what was
+  // asked may not need it.
+  let token: string | undefined;
+  if (useAccount) {
+    try {
+      token = await accountToken();
+    } catch (error) {
+      useAccount = false;
+      const detail =
+        error instanceof AccountSessionError ? error.message : "The account session is unavailable.";
+      console.warn(`Account access disabled for this turn: ${detail}`);
+      sseSend(res, { type: "status", label: "account-unavailable" });
+    }
+  }
 
   const tools: Anthropic.Beta.BetaToolUnion[] = [];
   if (request.webSearch) tools.push(webSearchTool(request.model));
@@ -431,7 +464,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
         messages,
         ...(tools.length ? { tools } : {}),
         ...(useAccount
-          ? { mcp_servers: mcpServers(), betas: ["mcp-client-2025-11-20"] }
+          ? { mcp_servers: mcpServers(token), betas: ["mcp-client-2025-11-20"] }
           : {}),
       });
       current = stream;
@@ -570,6 +603,7 @@ const server = http.createServer((req, res) => {
           models: [...ALLOWED_MODELS],
           courses: courseTools !== null,
           account: mcpEnabled,
+          accountSignedIn: accountSessionAvailable(),
         })
       );
     return;

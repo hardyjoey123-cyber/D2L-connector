@@ -430,17 +430,23 @@ a connector configured elsewhere; it needs its own URL and token. The Claude API
 calls that server on the app's behalf, so no brokerage credential is ever held
 here.
 
+If the server guards itself with OAuth — most do — run `npm run account:login`
+once. It discovers how the service wants clients to sign in, registers this app,
+opens the provider's own sign-in page in your browser, and saves the resulting
+token to `.auth/account.json` (gitignored, owner-readable). Your password is
+typed on the provider's page and never seen here, exactly as with the Brightspace
+login. A refresh token, when one is issued, means it renews itself from then on.
+
 `npm run account:check` diagnoses the connection: whether the server is
 reachable, whether it accepts the token, and whether the tool names this project
 allows actually exist there — an allowlist of names that don't match is
 indistinguishable from having no access at all. It prints statuses, header names
 and tool names, never the token.
 
-The check calls out one situation nothing here can fix: a server whose
-`www-authenticate` challenge points at an OAuth flow. That is an interactive
-browser sign-in, and the API's MCP connector can only send a token it is handed.
-Unless the service issues a long-lived token you can paste into `.env`, it
-cannot be connected this way.
+When the server does demand OAuth, the check follows discovery to the one field
+that decides whether `account:login` can work at all: whether a registration
+endpoint exists. Without one, registration is closed to pre-approved clients and
+nothing here can obtain a token.
 
 **Access is read-only, and that is enforced rather than requested.** The request
 sends an `allowed_tools` list containing only read operations, which the API
