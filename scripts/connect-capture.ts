@@ -28,17 +28,31 @@ const CAPTURE_TIMEOUT_MS = 20 * 60 * 1000;
  * same capture works for other publishers (Pearson, WileyPLUS, Cengage).
  */
 const INTERESTING_HOST = new RegExp(
-  process.env.CONNECT_CAPTURE_HOSTS ?? "mheducation|mhhe\\.com|connect\\.",
+  process.env.CONNECT_CAPTURE_HOSTS ??
+    "mheducation|mhhe\\.com|connect\\.|readanywhere|ebook",
   "i"
 );
 const MAX_CAPTURES = 200;
 const MAX_BODY_BYTES = 512 * 1024;
+/**
+ * Every response, not just JSON, recorded as URL + type + size only. This is
+ * how you tell whether something like an eBook arrives as readable text, as
+ * images, or as an encrypted blob — without storing any of it.
+ */
+const MAX_RESOURCE_LOG = 400;
 
 interface Capture {
   url: string;
   method: string;
   status: number;
   body: unknown;
+}
+
+interface ResourceNote {
+  url: string;
+  status: number;
+  type: string;
+  bytes: number | null;
 }
 
 function normalizeDomain(raw: string): string {
@@ -50,6 +64,28 @@ function normalizeDomain(raw: string): string {
  * Describes a value's structure without revealing it. `{name: "Joey"}`
  * becomes `{name: string}` — enough to write a parser, nothing personal.
  */
+/** Counts and sizes per content type, with a few example paths each. */
+function summarizeResources(resources: ResourceNote[]) {
+  const byType = new Map<string, { count: number; totalBytes: number; examples: string[] }>();
+  for (const resource of resources) {
+    const entry = byType.get(resource.type) ?? { count: 0, totalBytes: 0, examples: [] };
+    entry.count += 1;
+    entry.totalBytes += resource.bytes ?? 0;
+    if (entry.examples.length < 3) {
+      try {
+        const parsed = new URL(resource.url);
+        entry.examples.push(`${parsed.hostname}${parsed.pathname}`);
+      } catch {
+        entry.examples.push(resource.url);
+      }
+    }
+    byType.set(resource.type, entry);
+  }
+  return [...byType.entries()]
+    .sort((a, b) => b[1].totalBytes - a[1].totalBytes)
+    .map(([type, entry]) => ({ type, ...entry }));
+}
+
 function shapeOf(value: unknown, depth = 0): unknown {
   if (depth > 4) return "…";
   if (value === null) return "null";
@@ -96,6 +132,7 @@ async function main() {
   console.log("  2. Go into your accounting course.");
   console.log("  3. Click through to Connect the way you normally do.");
   console.log("  4. Open the page that lists your assignments and due dates.");
+  console.log("  5. To include the textbook: open the eBook and read a chapter.");
   console.log("\nThen come back here and press Enter.\n");
 
   const browser = await chromium.launch({
@@ -103,14 +140,27 @@ async function main() {
   });
   const context = await browser.newContext();
   const captures: Capture[] = [];
+  const resources: ResourceNote[] = [];
 
   // Record JSON the Connect app fetches for itself. Its own API is a far more
   // reliable thing to parse than rendered HTML.
   context.on("response", (response) => {
-    if (captures.length >= MAX_CAPTURES) return;
     const url = response.url();
     if (!INTERESTING_HOST.test(new URL(url).hostname)) return;
-    if (!/json/i.test(response.headers()["content-type"] ?? "")) return;
+
+    const headers = response.headers();
+    if (resources.length < MAX_RESOURCE_LOG) {
+      const length = Number(headers["content-length"]);
+      resources.push({
+        url: url.split("?")[0],
+        status: response.status(),
+        type: (headers["content-type"] ?? "unknown").split(";")[0],
+        bytes: Number.isFinite(length) ? length : null,
+      });
+    }
+
+    if (captures.length >= MAX_CAPTURES) return;
+    if (!/json/i.test(headers["content-type"] ?? "")) return;
 
     void response
       .body()
@@ -182,6 +232,9 @@ async function main() {
       shape: shapeOf(capture.body),
     })),
     allUrls: [...new Set(captures.map((c) => c.url.split("?")[0]))],
+    // Grouped by content type: the quickest way to see whether a reader is
+    // serving text, images, or something opaque.
+    resourceTypes: summarizeResources(resources),
   };
   const summaryPath = path.join(outDir, "summary.json");
   fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));

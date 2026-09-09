@@ -404,7 +404,14 @@ It writes two files under `.auth/connect-capture/` (gitignored):
 | File | Contents | Safe to share |
 | --- | --- | --- |
 | `captures.json` | The full responses — your name, email, scores | **No** |
-| `summary.json` | URLs and response *shape*: key names and value types only | Yes |
+| `summary.json` | URLs, response *shape* (key names and value types), and how content arrived | Yes |
+
+`summary.json` also groups every response by content type with counts and
+sizes. That is what answers whether something like the eBook arrives as
+readable text, as page images needing OCR, or as an opaque encrypted blob —
+without storing any of it. Text is readable; images would need OCR; an opaque
+blob means the content is protected, and this repository does not circumvent
+protection.
 
 The summary deliberately never contains a value. `{"firstName": "Joey"}`
 appears as `{"firstName": "string"}`, which is enough to write a parser against
