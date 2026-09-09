@@ -56,7 +56,9 @@ spoken aloud by a speech synthesizer, never read, so write for the ear:
 
 const SYSTEM_PROMPT = process.env.JARVIS_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT;
 
-if (!process.env.ANTHROPIC_API_KEY) {
+const API_KEY = process.env.ANTHROPIC_API_KEY?.trim();
+
+if (!API_KEY) {
   console.error(
     "ANTHROPIC_API_KEY is not set.\n" +
       "Add it to .env in the project root (see .env.example), then start again."
@@ -64,7 +66,28 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-const client = new Anthropic();
+// A real key is ~100 characters. Catching the example value here saves a
+// round trip through the API to be told it is invalid.
+if (!API_KEY.startsWith("sk-ant-") || API_KEY.length < 40) {
+  console.error(
+    `ANTHROPIC_API_KEY does not look like a real key (got ${API_KEY.length} characters).\n` +
+      "It should start with sk-ant- and run about 100 characters. If you copied a\n" +
+      "placeholder from the docs, replace it with a key from\n" +
+      "https://console.anthropic.com/settings/keys"
+  );
+  process.exit(1);
+}
+
+/**
+ * Keys created at the organization level aren't tied to a workspace, and the
+ * API rejects them unless the request names one. Keys scoped to a workspace
+ * carry it already and need nothing here.
+ */
+const WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID?.trim();
+
+const client = new Anthropic(
+  WORKSPACE_ID ? { defaultHeaders: { "anthropic-workspace-id": WORKSPACE_ID } } : {}
+);
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -244,6 +267,12 @@ function describeApiError(error: unknown): string {
     return "Could not reach the Claude API. Check the network connection.";
   }
   if (error instanceof Anthropic.APIError) {
+    if (error.message.includes("anthropic-workspace-id")) {
+      return (
+        "This API key is not tied to a workspace. Either create a key scoped to " +
+        "one, or set ANTHROPIC_WORKSPACE_ID in .env."
+      );
+    }
     return `Claude API error ${error.status ?? ""}: ${error.message}`.trim();
   }
   return error instanceof Error ? error.message : String(error);

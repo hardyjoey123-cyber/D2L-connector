@@ -307,4 +307,8 @@ Everything below is optional and set in `.env` (see `.env.example`):
 - `JARVIS_SYSTEM_PROMPT` — replaces the built-in instructions wholesale. The default tells
   Claude to answer in one to three sentences of plain spoken prose, with no markdown,
   since every word gets read aloud.
+- `ANTHROPIC_WORKSPACE_ID` — only needed if your API key is *not* scoped to a
+  workspace. Organization-level keys must name a workspace on every request, and
+  the API returns a 400 saying so. Creating a workspace-scoped key in the console
+  is the simpler fix; this is here for when you'd rather keep the key you have.
 - `JARVIS_MODEL`, `JARVIS_MAX_TOKENS`, `JARVIS_PORT`, `JARVIS_HOST`.
