@@ -55,6 +55,8 @@ export const DEFAULTS = {
   rate: 1.02,
   model: "claude-opus-5",
   webSearch: true,
+  /** Ignored unless the server reports Brightspace is configured. */
+  courses: true,
   wakeWord: false,
   wakePhrase: "jarvis",
   memory: true,

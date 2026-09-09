@@ -14,6 +14,7 @@ import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 
 import { projectRoot } from "../../src/config.js";
+import { createCourseTools } from "./courses.js";
 
 const PUBLIC_DIR = path.join(projectRoot, "web", "public");
 
@@ -68,9 +69,22 @@ const PERSONA_LIMIT = 2000;
 /** JARVIS_SYSTEM_PROMPT still replaces everything, persona included. */
 const SYSTEM_PROMPT_OVERRIDE = process.env.JARVIS_SYSTEM_PROMPT;
 
-function buildSystemPrompt(persona: string | undefined): string {
+/** Grounding for "what's due this week" — the model needs to know when now is. */
+function todayLine(): string {
+  return `Today is ${new Date().toDateString()}.`;
+}
+
+const COURSE_GUIDANCE = `You can look up the user's Brightspace courses, coursework, grades,
+and announcements. Use those tools whenever a question touches their classes rather than
+guessing. Speak about dates the way a person would — "Thursday", "next Tuesday", "in three
+days" — not as calendar timestamps, and mention only the few most relevant items unless
+asked for the full list.`;
+
+function buildSystemPrompt(persona: string | undefined, withCourses: boolean): string {
   if (SYSTEM_PROMPT_OVERRIDE) return SYSTEM_PROMPT_OVERRIDE;
-  return `${persona?.trim() || DEFAULT_PERSONA}\n\n${VOICE_RULES}`;
+  const parts = [persona?.trim() || DEFAULT_PERSONA, VOICE_RULES, todayLine()];
+  if (withCourses) parts.push(COURSE_GUIDANCE);
+  return parts.join("\n\n");
 }
 
 /**
@@ -112,6 +126,12 @@ const WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID?.trim();
 const client = new Anthropic(
   WORKSPACE_ID ? { defaultHeaders: { "anthropic-workspace-id": WORKSPACE_ID } } : {}
 );
+
+/** null unless Brightspace is configured in .env. */
+const courseTools = createCourseTools();
+if (courseTools) {
+  console.log("Brightspace tools enabled: courses, coursework, grades, announcements.");
+}
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -181,6 +201,7 @@ interface ChatRequest {
   persona?: string;
   model: string;
   webSearch: boolean;
+  courses: boolean;
 }
 
 /**
@@ -195,11 +216,12 @@ function parseChatRequest(raw: string): ChatRequest {
     throw new Error("Expected a JSON body of the form { messages: [...] }");
   }
 
-  const { messages: input, persona, model, webSearch } = body as {
+  const { messages: input, persona, model, webSearch, courses } = body as {
     messages: unknown[];
     persona?: unknown;
     model?: unknown;
     webSearch?: unknown;
+    courses?: unknown;
   };
 
   if (input.length === 0) throw new Error("messages must not be empty");
@@ -239,6 +261,8 @@ function parseChatRequest(raw: string): ChatRequest {
     persona: persona as string | undefined,
     model: (model as string | undefined) ?? MODEL,
     webSearch: webSearch === true,
+    // Only honoured when Brightspace is actually configured.
+    courses: courses !== false && courseTools !== null,
   };
 }
 
@@ -261,8 +285,8 @@ function sseSend(res: http.ServerResponse, event: unknown) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-/** How many times a paused turn may be resumed before we give up. */
-const MAX_ROUNDS = 4;
+/** How many times a paused or tool-using turn may be resumed before we stop. */
+const MAX_ROUNDS = 6;
 
 async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
   let request: ChatRequest;
@@ -284,9 +308,13 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
     "x-accel-buffering": "no",
   });
 
-  const messages = [...request.messages];
-  const system = buildSystemPrompt(request.persona);
-  const tools = request.webSearch ? [webSearchTool(request.model)] : undefined;
+  const messages: Anthropic.MessageParam[] = [...request.messages];
+  const useCourses = request.courses && courseTools !== null;
+  const system = buildSystemPrompt(request.persona, useCourses);
+
+  const tools: Anthropic.ToolUnion[] = [];
+  if (request.webSearch) tools.push(webSearchTool(request.model));
+  if (useCourses && courseTools) tools.push(...courseTools.definitions);
 
   let current: ReturnType<typeof client.messages.stream> | null = null;
   // If the listener navigates away or barges in, stop paying for tokens
@@ -304,7 +332,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
         output_config: { effort: EFFORT },
         system,
         messages,
-        ...(tools ? { tools } : {}),
+        ...(tools.length ? { tools } : {}),
       });
       current = stream;
 
@@ -334,13 +362,60 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
         continue;
       }
 
+      // Client-side tools: Brightspace lookups run here, then the model gets
+      // another turn to actually answer with what came back.
+      // Gated on useCourses as well as availability: a tool the request did
+      // not enable must never run, whatever the model asks for.
+      if (final.stop_reason === "tool_use" && useCourses && courseTools) {
+        const calls = final.content.filter(
+          (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
+        );
+        if (calls.length === 0) {
+          sseSend(res, { type: "done", stopReason: final.stop_reason });
+          return;
+        }
+
+        sseSend(res, { type: "status", label: "courses" });
+        // Run them together: several courses in one question is the normal case.
+        const results = await Promise.all(
+          calls.map(async (call): Promise<Anthropic.ToolResultBlockParam> => {
+            try {
+              const output = await courseTools.run(
+                call.name,
+                (call.input ?? {}) as Record<string, unknown>
+              );
+              return {
+                type: "tool_result",
+                tool_use_id: call.id,
+                content: JSON.stringify(output),
+              };
+            } catch (error) {
+              console.error(`Tool ${call.name} failed:`, error);
+              return {
+                type: "tool_result",
+                tool_use_id: call.id,
+                is_error: true,
+                content:
+                  error instanceof Error
+                    ? `Lookup failed: ${error.message}`
+                    : "Lookup failed.",
+              };
+            }
+          })
+        );
+
+        messages.push({ role: "assistant", content: final.content });
+        messages.push({ role: "user", content: results });
+        continue;
+      }
+
       sseSend(res, { type: "done", stopReason: final.stop_reason });
       return;
     }
 
     sseSend(res, {
       type: "error",
-      message: "That needed more searching than expected. Try a narrower question.",
+      message: "That needed more lookups than expected. Try a narrower question.",
     });
   } catch (error) {
     if (res.writableEnded) return;
@@ -393,6 +468,7 @@ const server = http.createServer((req, res) => {
           model: MODEL,
           effort: EFFORT,
           models: [...ALLOWED_MODELS],
+          courses: courseTools !== null,
         })
       );
     return;

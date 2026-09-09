@@ -50,6 +50,10 @@ body.is-error     { --accent: 8; --glow: 0.8; }
 
 * { box-sizing: border-box; }
 
+/* Every layout rule below sets display, which would otherwise win against the
+   browser's own [hidden] rule and leave hidden elements on screen. */
+[hidden] { display: none !important; }
+
 html,
 body {
   height: 100%;

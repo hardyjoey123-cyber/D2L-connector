@@ -244,6 +244,8 @@ You speak, Claude answers, and it speaks back — no typing, no chat log to scro
   only, and cleared with one button.
 - **Everything is yours to change.** A settings panel covers the name, accent
   colour, personality, voice, speaking rate, and model — no file editing.
+- **It knows your courses.** If Brightspace is configured (above), you can ask
+  "what's due this week?" out loud and get a real answer.
 
 ## Running it
 
@@ -308,6 +310,36 @@ Conversation state lives entirely in the browser and is sent with each request, 
 server is stateless and restarting it mid-conversation loses nothing. History is capped
 at the last 30 turns to bound cost and latency.
 
+## Course access
+
+If the Brightspace credentials at the top of this README are configured, the
+voice interface gains four tools and a **Course access** toggle in settings.
+Ask "what's due this week", "how am I doing in chemistry", or "any
+announcements" and it looks the answer up before replying.
+
+Nothing extra is needed beyond a working `.env` — the server detects
+`BRIGHTSPACE_DOMAIN` at startup, and the toggle only appears when the lookup is
+actually available. Without it the voice interface runs exactly as before.
+
+These tools wrap the same functions the MCP server uses (`src/tools/`), but
+reshape them for speech. The MCP tools take an `orgUnitId`, which would force
+two round trips — list the courses, then ask again — before anything could be
+said out loud. `web/server/courses.ts` takes a course *name* instead, resolves
+it server-side, fans out across courses in parallel, and strips assignment
+instructions and announcement HTML that would otherwise be latency the listener
+sits through.
+
+| Tool | Answers |
+| --- | --- |
+| `list_courses` | "What classes am I taking?" |
+| `get_coursework` | "What's due this week?" — assignments and quizzes, soonest first |
+| `get_grades` | "How am I doing in chemistry?" |
+| `get_announcements` | "Anything new posted?" |
+
+An ambiguous course name comes back as a list of candidates rather than a
+guess, so it asks which one you meant. A single course failing to load doesn't
+sink the whole answer.
+
 ## Settings
 
 Most of what you'd want to change lives in the **Settings** panel in the app
@@ -320,6 +352,7 @@ Most of what you'd want to change lives in the **Settings** panel in the app
 | Voice and speaking rate | Whichever voices your OS provides |
 | Model | Opus 5 by default; Haiku is ~5× cheaper and less sharp |
 | Web search | Off means it answers from its own knowledge only |
+| Course access | Only shown when Brightspace is configured |
 | Wake word | Continuous listening for a phrase you choose |
 | Remember conversations | History persists across sessions, in this browser |
 

@@ -62,6 +62,9 @@ const el = {
   setModel: document.getElementById("set-model"),
   setModelNote: document.getElementById("set-model-note"),
   setSearch: document.getElementById("set-search"),
+  fieldCourses: document.getElementById("field-courses"),
+  setCourses: document.getElementById("set-courses"),
+  coursesNote: document.getElementById("courses-note"),
   setWake: document.getElementById("set-wake"),
   setWakePhrase: document.getElementById("set-wake-phrase"),
   setMemory: document.getElementById("set-memory"),
@@ -95,6 +98,9 @@ const state = {
   request: null, // AbortController for the in-flight reply
 };
 
+/** What the backend says it can do, filled in at boot. */
+const backend = { courses: false };
+
 /** Pending re-arm of the recognizer, so repeated calls can't stack timers. */
 let listenRetry = null;
 
@@ -114,7 +120,7 @@ function refreshStatus() {
   const labels = {
     idle: state.waking ? `Awaiting “${settings.get("wakePhrase")}”` : "Standby",
     listening: "Listening",
-    thinking: state.searching ? "Searching" : "Processing",
+    thinking: state.searching || "Processing",
     speaking: "Speaking",
     error: "Fault",
   };
@@ -216,7 +222,7 @@ function primaryAction() {
       // Barge-in: drop the current reply and hand the floor back.
       state.request?.abort();
       state.request = null;
-      state.searching = false;
+      state.searching = null;
       speaker.cancel();
       startListening();
       break;
@@ -340,7 +346,7 @@ async function send(text) {
   appendToLog("user", text);
 
   memory.push("user", text);
-  state.searching = false;
+  state.searching = null;
   setMode("thinking");
 
   const controller = new AbortController();
@@ -356,14 +362,17 @@ async function send(text) {
       persona: settings.personaText(),
       model: settings.get("model"),
       webSearch: settings.get("webSearch"),
+      courses: backend.courses && settings.get("courses"),
       onStatus: (label) => {
-        state.searching = label === "searching";
+        // The pause before an answer is much easier to sit through when the
+        // interface says what it's doing.
+        state.searching = { searching: "Searching", courses: "Checking courses" }[label] ?? null;
         refreshStatus();
       },
       onDelta: (delta, full) => {
         if (!started) {
           started = true;
-          state.searching = false;
+          state.searching = null;
           logLine = appendToLog("assistant", "");
           // Speech begins on the first complete sentence, not the last token.
           if (!speaker.muted && speaker.supported) setMode("speaking");
@@ -383,7 +392,7 @@ async function send(text) {
     speaker.end();
   } catch (error) {
     if (state.request === controller) state.request = null;
-    state.searching = false;
+    state.searching = null;
     speaker.cancel();
     if (controller.signal.aborted || error?.name === "AbortError") return;
 
@@ -593,6 +602,7 @@ function buildSettingsPanel() {
     syncSettingsForm();
   });
   bind(el.setSearch, "change", () => settings.update({ webSearch: el.setSearch.checked }));
+  bind(el.setCourses, "change", () => settings.update({ courses: el.setCourses.checked }));
   bind(el.setWake, "change", () => {
     settings.update({ wakeWord: el.setWake.checked });
     if (el.setWake.checked) startWaking();
@@ -646,6 +656,7 @@ function syncSettingsForm() {
   el.setWake.checked = values.wakeWord;
   el.setWakePhrase.value = values.wakePhrase;
   el.setMemory.checked = values.memory;
+  el.setCourses.checked = values.courses;
   el.setWakePhrase.hidden = !values.wakeWord;
   syncSwatches();
 
@@ -694,6 +705,7 @@ async function boot() {
   try {
     const health = await fetch("/api/health").then((r) => r.json());
     if (Array.isArray(health.models) && health.models.length) models = health.models;
+    backend.courses = health.courses === true;
   } catch {
     el.modelReadout.textContent = "◦ offline";
     toast("Backend unreachable. Start it with: npm run jarvis");
@@ -701,6 +713,13 @@ async function boot() {
   // The server decides which models are allowed, so the picker mirrors it.
   el.setModel.replaceChildren(...models.map((id) => new Option(id, id)));
   if (!models.includes(settings.get("model"))) settings.update({ model: models[0] });
+
+  // The toggle only appears when the server actually has Brightspace wired up;
+  // offering a switch that can't do anything is worse than offering none.
+  el.fieldCourses.hidden = !backend.courses;
+  el.coursesNote.textContent = backend.courses
+    ? "Lets it read your Brightspace courses, coursework, grades, and announcements."
+    : "";
 
   syncSettingsForm();
   applySettings();

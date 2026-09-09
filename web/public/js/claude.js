@@ -12,12 +12,12 @@
  */
 export async function streamReply(
   messages,
-  { onDelta, onStatus, abortSignal, persona, model, webSearch } = {}
+  { onDelta, onStatus, abortSignal, persona, model, webSearch, courses } = {}
 ) {
   const response = await fetch("/api/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ messages, persona, model, webSearch }),
+    body: JSON.stringify({ messages, persona, model, webSearch, courses }),
     signal: abortSignal,
   });
 
