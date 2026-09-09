@@ -25,7 +25,8 @@
 import "dotenv/config";
 import path from "node:path";
 import fs from "node:fs";
-import { chromium } from "playwright";
+import readline from "node:readline";
+import { chromium, type BrowserContext } from "playwright";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -41,7 +42,22 @@ function normalizeDomain(raw: string): string {
   return trimmed.startsWith("http") ? trimmed : `https://${trimmed}`;
 }
 
-const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Brightspace sets these once you are actually authenticated. Watching for
+ * them beats watching the URL: SSO can land you on a campus portal, a course
+ * page, or a new tab, none of which look like /d2l/home, and every one of
+ * those is a successful login.
+ */
+const SESSION_COOKIES = ["d2lSecureSessionVal", "d2lSessionVal"];
+
+async function hasSessionCookie(context: BrowserContext): Promise<boolean> {
+  const cookies = await context.cookies();
+  return cookies.some(
+    (cookie) => SESSION_COOKIES.includes(cookie.name) && cookie.value.length > 0
+  );
+}
 
 async function main() {
   const domain = normalizeDomain(requireEnv("BRIGHTSPACE_DOMAIN"));
@@ -51,29 +67,73 @@ async function main() {
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
 
   console.log("\nOpening a browser window. Log in to Brightspace as you normally would,");
-  console.log("including any two-factor/SSO step. This script will detect success and");
-  console.log(`save your session automatically (waiting up to ${LOGIN_TIMEOUT_MS / 60000} minutes).\n`);
+  console.log("including any two-factor/SSO step — new tabs and campus portals are fine.");
+  console.log("It saves automatically once you are signed in.");
+  console.log("If it somehow doesn't notice, press Enter here to save anyway.\n");
 
-  const browser = await chromium.launch({ headless: false });
+  const browser = await chromium.launch({
+    // Headless only exists so this flow can be tested; a real login needs a
+    // window you can actually type into.
+    headless: process.env.BRIGHTSPACE_LOGIN_HEADLESS === "1",
+  });
   const context = await browser.newContext();
   const page = await context.newPage();
 
   await page.goto(`${domain}/d2l/home`);
 
-  try {
-    // Brightspace's dashboard shell renders a "D2L.LP" namespace and course
-    // widgets under /d2l/home once logged in; wait for the URL to settle
-    // there (as opposed to a login/SSO provider domain) as our success signal.
-    await page.waitForURL(
-      (url) => url.hostname === new URL(domain).hostname && url.pathname.startsWith("/d2l/home"),
-      { timeout: LOGIN_TIMEOUT_MS }
-    );
-    // Give the SPA a moment to finish setting all its session cookies after redirect.
-    await page.waitForTimeout(2000);
-  } catch {
+  // Pressing Enter forces a save, for the case where detection fails but the
+  // user can plainly see they are logged in.
+  const keyboard = readline.createInterface({ input: process.stdin });
+  let forced = false;
+  keyboard.once("line", () => {
+    forced = true;
+  });
+
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  let detected = false;
+  let closed = false;
+
+  while (Date.now() < deadline) {
+    if (forced) break;
+    try {
+      if (await hasSessionCookie(context)) {
+        detected = true;
+        // Let the dashboard finish setting the rest of its cookies.
+        await page.waitForTimeout(2000);
+        break;
+      }
+    } catch {
+      // The window was closed, or navigated somewhere the context can't be
+      // queried. Save whatever we have rather than losing the login.
+      closed = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  keyboard.close();
+  process.stdin.pause();
+
+  if (!detected && !forced && !closed) {
     await browser.close();
-    console.error("\nTimed out waiting for login to complete. Run this again and try once more.");
+    console.error(
+      "\nTimed out waiting for login. Run it again — and if the browser shows you\n" +
+        "logged in but nothing happens, press Enter in this window to save anyway."
+    );
     process.exit(1);
+  }
+
+  if (!detected) {
+    const stillThere = await hasSessionCookie(context).catch(() => false);
+    if (!stillThere) {
+      await browser.close().catch(() => {});
+      console.error(
+        "\nNo Brightspace session cookie found, so there is nothing to save.\n" +
+          "Make sure you are fully logged in — you should be able to see your\n" +
+          "courses — then run this again."
+      );
+      process.exit(1);
+    }
   }
 
   await context.storageState({ path: statePath });

@@ -135,10 +135,15 @@ Setup:
    npm run auth:session
    ```
    A real Chromium window opens to your Brightspace login page. Log in exactly as you
-   normally would, including any two-factor/SSO step your school requires. Once you land on
-   your Brightspace dashboard, the script detects it, saves your session to
-   `.auth/storageState.json` (already gitignored — never commit this file), and closes the
-   browser.
+   normally would, including any two-factor/SSO step your school requires. It watches for
+   Brightspace's own session cookie rather than for a particular URL, so campus SSO portals,
+   redirects, and new tabs are all fine — it saves as soon as you are actually signed in,
+   wherever you happen to land. The session goes to `.auth/storageState.json` (already
+   gitignored — never commit this file) and the browser closes itself.
+
+   If it somehow doesn't notice, press **Enter** in the terminal to save anyway. That still
+   refuses if no session cookie is present, so it can't write a file that wouldn't work.
+   It waits up to ten minutes.
 4. Whenever a tool call fails with a message about an expired session, just re-run
    `npm run auth:session`.
 
