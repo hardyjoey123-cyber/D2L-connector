@@ -13,6 +13,7 @@
  * Usage: npm run account:check
  */
 import "dotenv/config";
+import { pathToFileURL } from "node:url";
 
 /** Kept in step with web/server/index.ts. */
 const READ_ONLY_TOOLS = [
@@ -100,6 +101,32 @@ async function getJson(url: string): Promise<Record<string, unknown> | null> {
 }
 
 /**
+ * Every standard place authorization server metadata can live.
+ *
+ * For an issuer carrying a path, RFC 8414 inserts the well-known segment at the
+ * root and appends the path — https://host/.well-known/oauth-authorization-server/mcp/trading
+ * — while OpenID Connect appends the well-known to the issuer instead. They are
+ * different URLs, and checking only one produces a 404 that looks like an
+ * answer and is not.
+ */
+export function metadataCandidates(issuer: string): string[] {
+  const url = new URL(issuer);
+  const path = url.pathname.replace(/\/$/, "");
+  const origin = url.origin;
+  const candidates = [
+    `${origin}/.well-known/oauth-authorization-server${path}`,
+    `${origin}/.well-known/openid-configuration${path}`,
+    `${origin}${path}/.well-known/oauth-authorization-server`,
+    `${origin}${path}/.well-known/openid-configuration`,
+  ];
+  if (path) {
+    candidates.push(`${origin}/.well-known/oauth-authorization-server`);
+    candidates.push(`${origin}/.well-known/openid-configuration`);
+  }
+  return [...new Set(candidates)];
+}
+
+/**
  * Follows OAuth discovery to answer one question: can a client like this one
  * register itself, or is registration closed to pre-approved partners? That
  * decides whether building the sign-in flow here is worth anyone's time.
@@ -129,12 +156,20 @@ async function probeOAuth(challenge: string) {
     return;
   }
 
-  const base = issuer.replace(/\/$/, "");
-  const config =
-    (await getJson(`${base}/.well-known/oauth-authorization-server`)) ??
-    (await getJson(`${base}/.well-known/openid-configuration`));
+  let config: Record<string, unknown> | null = null;
+  for (const candidate of metadataCandidates(issuer)) {
+    config = await getJson(candidate);
+    if (config) {
+      console.log(`   metadata found at:      ${candidate}`);
+      break;
+    }
+  }
   if (!config) {
-    console.log("\nVERDICT: the authorization server's configuration could not be read.");
+    console.log(
+      "\nVERDICT: no authorization server metadata is published at any of the\n" +
+        "standard locations, so there is no documented way for a client to\n" +
+        "obtain a token. This cannot be connected this way."
+    );
     return;
   }
 
@@ -249,7 +284,14 @@ async function main() {
   console.log("\nVERDICT: working. The account is reachable and read-only access is live.\n");
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+// Only run when invoked directly, so the URL logic above can be imported and
+// tested without the diagnostic firing.
+const invokedDirectly =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}
