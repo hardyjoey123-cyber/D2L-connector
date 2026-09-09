@@ -77,6 +77,89 @@ async function rpc(method: string, params: unknown, sessionId?: string) {
   return { response, body: await readBody(response) };
 }
 
+/** Pulls the URL out of a `Bearer resource_metadata="…"` challenge. */
+function resourceMetadataUrl(challenge: string): string | null {
+  return /resource_metadata="([^"]+)"/i.exec(challenge)?.[1] ?? null;
+}
+
+async function getJson(url: string): Promise<Record<string, unknown> | null> {
+  try {
+    const response = await fetch(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      console.log(`   ${url} -> HTTP ${response.status}`);
+      return null;
+    }
+    return (await response.json()) as Record<string, unknown>;
+  } catch (error) {
+    console.log(`   ${url} -> ${error instanceof Error ? error.message : error}`);
+    return null;
+  }
+}
+
+/**
+ * Follows OAuth discovery to answer one question: can a client like this one
+ * register itself, or is registration closed to pre-approved partners? That
+ * decides whether building the sign-in flow here is worth anyone's time.
+ */
+async function probeOAuth(challenge: string) {
+  const metadataUrl = resourceMetadataUrl(challenge);
+  if (!metadataUrl) {
+    console.log("The challenge names no metadata URL, so there is nothing to follow.");
+    return;
+  }
+
+  const resource = await getJson(metadataUrl);
+  if (!resource) {
+    console.log("\nVERDICT: the metadata document could not be read.");
+    return;
+  }
+
+  const servers = Array.isArray(resource.authorization_servers)
+    ? (resource.authorization_servers as string[])
+    : [];
+  console.log(`   scopes advertised:      ${JSON.stringify(resource.scopes_supported ?? "none")}`);
+  console.log(`   authorization servers:  ${servers.length ? servers.join(", ") : "none listed"}`);
+
+  const issuer = servers[0];
+  if (!issuer) {
+    console.log("\nVERDICT: no authorization server is advertised, so there is no sign-in to run.");
+    return;
+  }
+
+  const base = issuer.replace(/\/$/, "");
+  const config =
+    (await getJson(`${base}/.well-known/oauth-authorization-server`)) ??
+    (await getJson(`${base}/.well-known/openid-configuration`));
+  if (!config) {
+    console.log("\nVERDICT: the authorization server's configuration could not be read.");
+    return;
+  }
+
+  const registration = config.registration_endpoint as string | undefined;
+  console.log(`   authorization endpoint: ${config.authorization_endpoint ?? "none"}`);
+  console.log(`   token endpoint:         ${config.token_endpoint ?? "none"}`);
+  console.log(`   registration endpoint:  ${registration ?? "NONE — registration is closed"}`);
+  console.log(
+    `   PKCE methods:           ${JSON.stringify(config.code_challenge_methods_supported ?? "none")}`
+  );
+
+  if (registration) {
+    console.log(
+      "\nVERDICT: this service supports open client registration, so a sign-in\n" +
+        "flow could be built here — the server would run the browser sign-in once,\n" +
+        "then keep the token refreshed and hand it to the API."
+    );
+  } else {
+    console.log(
+      "\nVERDICT: registration is closed to pre-approved clients only. Nothing\n" +
+        "built here can obtain a token, so this cannot be connected this way."
+    );
+  }
+}
+
 async function main() {
   console.log("\nAccount (MCP) diagnostic\n" + "=".repeat(40));
   console.log(`JARVIS_MCP_URL:   ${URL_ ?? "MISSING"}`);
@@ -118,12 +201,11 @@ async function main() {
     }
     if (challenge && /oauth|bearer.*resource_metadata/i.test(challenge)) {
       console.log(
-        "\nThe challenge above points at an OAuth flow. That is an interactive\n" +
-          "browser sign-in, which the Claude API's MCP connector cannot perform —\n" +
-          "it can only send a token it is given. Unless that service can issue a\n" +
-          "long-lived token you can paste into .env, this cannot be connected\n" +
-          "this way, and no change to this project would fix it."
+        "\nThe challenge points at an OAuth flow. The Claude API's MCP connector\n" +
+          "can only send a token it is handed, so something has to obtain one first.\n" +
+          "Checking whether this service lets a client like this one register…\n"
       );
+      await probeOAuth(challenge);
     }
     console.log();
     process.exit(1);
