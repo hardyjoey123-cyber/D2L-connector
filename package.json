@@ -20,7 +20,8 @@
     "connect:check": "tsx scripts/connect-check.ts",
     "account:check": "tsx scripts/account-check.ts",
     "account:login": "tsx scripts/account-login.ts",
-    "trade:schema": "tsx scripts/trade-schema.ts"
+    "trade:schema": "tsx scripts/trade-schema.ts",
+    "test": "tsx tests/order-payload.test.mts && tsx tests/trading.test.mts"
   },
   "engines": {
     "node": ">=18.0.0"

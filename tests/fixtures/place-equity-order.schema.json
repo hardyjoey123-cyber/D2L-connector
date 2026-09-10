@@ -1,0 +1,20 @@
+{
+  "_comment": "The input schema Robinhood's place_equity_order actually declared, captured 2026-09-10 via `npm run trade:schema`. Kept verbatim so the payload builder is tested against the real thing rather than a guess.",
+  "type": "object",
+  "properties": {
+    "account_number": { "type": "string", "description": "Brokerage account number. Must be agentic_allowed=true." },
+    "symbol": { "type": "string", "description": "Stock symbol." },
+    "side": { "type": "string", "description": "'buy' or 'sell'." },
+    "type": { "type": "string", "description": "'market', 'limit', 'stop_market', or 'stop_limit'." },
+    "quantity": { "type": "string", "description": "Number of shares." },
+    "dollar_amount": { "type": "string", "description": "USD notional. Only valid with type=market." },
+    "limit_price": { "type": "string", "description": "Limit price; required for limit or stop_limit." },
+    "stop_price": { "type": "string", "description": "Stop trigger price." },
+    "time_in_force": { "type": "string", "description": "'gfd' or 'gtc'. Default: gfd." },
+    "market_hours": { "type": "string", "description": "'regular_hours' (default), 'extended_hours', or 'all_day_hours'." },
+    "tax_lots": { "type": ["null", "array"] },
+    "ref_id": { "type": "string", "description": "Idempotency key (UUID)." }
+  },
+  "required": ["account_number", "symbol", "side", "type"],
+  "additionalProperties": false
+}
