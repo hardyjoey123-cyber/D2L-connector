@@ -8,6 +8,9 @@ D2L Brightspace account, exposing your **courses**, **assignments**, **grades**,
 > voice assistant with a heads-up-display interface. It is a separate application from
 > the MCP server and shares nothing with it but the repo. See below.
 
+**Picking this up after a break?** `docs/RESUME.md` says where things stand;
+`docs/JARVIS.md` is the full record of what was built and why.
+
 ## Tools
 
 | Tool                     | Description                                                                      |
