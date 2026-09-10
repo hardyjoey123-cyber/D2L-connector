@@ -31,10 +31,23 @@ export type ConfirmMode = "typed" | "countdown" | "none";
 
 export class TradingError extends Error {}
 
+/**
+ * Why this trade exists. Recorded with the order because a log that says only
+ * what was bought cannot tell you afterwards whether the rules were followed —
+ * and a rulebook that asks the agent to learn from its own history needs the
+ * history to say what the signal was.
+ */
+export interface TradeRationale {
+  signalType: string;
+  signalDetail: string;
+  thesis: string;
+}
+
 export interface PendingTrade {
   id: string;
   intent: OrderIntent;
   summary: string;
+  rationale: TradeRationale;
   createdAt: number;
   /** Set in countdown mode: when this order places itself. */
   placesAt?: number;
@@ -129,7 +142,7 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
             "of one, and never place one they did not ask for.",
       input_schema: {
         type: "object",
-        required: ["symbol", "side"],
+        required: ["symbol", "side", "signalType", "signalDetail", "thesis"],
         properties: {
           symbol: { type: "string", description: "Ticker symbol, e.g. NVDA." },
           side: { type: "string", enum: ["buy", "sell"] },
@@ -137,6 +150,26 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
           amountUsd: { type: "number", description: "Dollar amount. Give this or quantity." },
           orderType: { type: "string", enum: ["market", "limit"] },
           limitPrice: { type: "number", description: "Required when orderType is limit." },
+          // Recorded, not decorative: these are what the log is read back for.
+          signalType: {
+            type: "string",
+            enum: ["congress", "insider", "macro", "direct", "exit"],
+            description:
+              "Where this trade came from. Use direct when the user asked for this " +
+              "specific trade themselves, and exit when closing a position under an " +
+              "exit rule. Never invent a signal to fill this in — if the user simply " +
+              "asked for it, that is direct.",
+          },
+          signalDetail: {
+            type: "string",
+            description:
+              "The specific evidence, in one line: who bought, when, how much, the " +
+              "filing, the divergence — or, for a direct trade, what the user asked for.",
+          },
+          thesis: {
+            type: "string",
+            description: "One sentence on why this trade should work.",
+          },
         },
       },
     },
@@ -178,6 +211,14 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
       throw new TradingError("A limit order needs a positive limit price.");
     }
 
+    const thesis = String(input.thesis ?? "").trim();
+    const signalType = String(input.signalType ?? "").trim().toLowerCase();
+    if (!signalType || !thesis) {
+      throw new TradingError(
+        "Every trade has to record where it came from and why. Say the signal and the thesis."
+      );
+    }
+
     const intent: OrderIntent = {
       symbol,
       side,
@@ -206,6 +247,14 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
     }
 
     return intent;
+  }
+
+  function rationaleOf(input: Record<string, unknown>): TradeRationale {
+    return {
+      signalType: String(input.signalType ?? "").trim().toLowerCase() || "unrecorded",
+      signalDetail: String(input.signalDetail ?? "").trim() || "not given",
+      thesis: String(input.thesis ?? "").trim() || "not given",
+    };
   }
 
   function describe(intent: OrderIntent): string {
@@ -254,11 +303,11 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
     try {
       result = await client.callTool(placeTool.name, args);
     } catch (error) {
-      logPlacement(trade.summary, false, error instanceof Error ? error.message : String(error));
+      logPlacement(trade, config.confirmMode, config.countdownSeconds, false, error instanceof Error ? error.message : String(error));
       throw error;
     }
     recordSpend(trade.intent);
-    logPlacement(trade.summary, true);
+    logPlacement(trade, config.confirmMode, config.countdownSeconds, true);
     return result;
   }
 
@@ -297,6 +346,7 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
       id: crypto.randomUUID(),
       intent,
       summary: describe(intent),
+      rationale: rationaleOf(input),
       createdAt: Date.now(),
     };
 

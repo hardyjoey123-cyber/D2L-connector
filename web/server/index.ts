@@ -657,14 +657,15 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
               };
             } catch (error) {
               console.error(`Tool ${call.name} failed:`, error);
+              // A refused trade is not a failed lookup. Saying so lets the model
+              // relay the real reason — and a rule that stopped an order is
+              // exactly what the user needs to hear.
+              const what = call.name === "propose_trade" ? "The trade was not placed" : "Lookup failed";
               return {
                 type: "tool_result",
                 tool_use_id: call.id,
                 is_error: true,
-                content:
-                  error instanceof Error
-                    ? `Lookup failed: ${error.message}`
-                    : "Lookup failed.",
+                content: error instanceof Error ? `${what}: ${error.message}` : `${what}.`,
               };
             }
           })

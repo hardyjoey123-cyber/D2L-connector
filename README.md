@@ -492,6 +492,7 @@ through, so it cannot claim it did. Outcomes reach the page directly over
 | Rulebook | Every trade must satisfy `trading-rules.md`, if you have written one. |
 | Confirmation | Per `JARVIS_TRADING_CONFIRM`, above. Typed proposals expire after five minutes. |
 | Review | `review_equity_order` runs first when the server offers it. |
+| Reason | Every trade must record a signal type, the evidence, and a thesis. A trade with none is refused. |
 | Record | Every order sent is appended to `trade-log.md`, whether it succeeded or not. |
 
 The caps are checked in code, after the rulebook, so nothing written in a
@@ -503,6 +504,25 @@ both shares and dollars, and only the schema says which is which. A required
 field that cannot be filled refuses the order instead of sending a partial one.
 
 `npm run trade:schema` prints those schemas and places nothing.
+
+### The trade log
+
+Every order is appended to `trade-log.md` in the format a rulebook is likely to
+already specify:
+
+```
+| DATE | ACTION | TICKER | AMOUNT | SIGNAL-TYPE | SIGNAL DETAIL | THESIS | AUTHORIZATION | PHASE | RESULT |
+```
+
+`propose_trade` requires the signal and the thesis, so they are recorded rather
+than reconstructed later — a rulebook that asks its agent to weight future
+decisions by its own track record needs the record to say what the signal was.
+`AUTHORIZATION` is how the order was actually authorized (typed, a countdown of
+n seconds, or autonomous), and `PHASE` comes from `JARVIS_TRADING_PHASE`.
+Failures are logged too, with the broker's own words. Writing the log can never
+fail an order.
+
+Point `JARVIS_TRADE_LOG` at your trading project's own log to keep one file.
 
 **If a trading rulebook governs the account, amend it too.** A trade asked for
 out loud does not originate from whatever signal sources that rulebook requires,
