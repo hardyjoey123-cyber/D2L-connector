@@ -162,6 +162,13 @@ function buildSystemPrompt(
  */
 const ALLOWED_MODELS = new Set(["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]);
 
+/**
+ * Not every model accepts output_config.effort — Haiku rejects it outright.
+ * Sending it anyway turns "switch to the cheap model to save money" into an
+ * API error, which is the worst possible moment to find out.
+ */
+const EFFORT_MODELS = new Set(["claude-opus-5", "claude-sonnet-5"]);
+
 /* ------------------------------------------------------------ trading MCP */
 
 /**
@@ -555,7 +562,14 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       const stream = client.beta.messages.stream({
         model: request.model,
         max_tokens: MAX_TOKENS,
-        output_config: { effort: EFFORT },
+        ...(EFFORT_MODELS.has(request.model) ? { output_config: { effort: EFFORT } } : {}),
+        // The expensive part of a voice turn is not the sentence you said, it
+        // is everything resent with it: the tool definitions, the voice rules,
+        // and the trading rulebook, on every single turn. That prefix barely
+        // changes, so cache it — cached tokens read at about a tenth of the
+        // price. Ordering is tools, then system, then messages, so the stable
+        // half is already in front.
+        cache_control: { type: "ephemeral" },
         system,
         messages,
         ...(tools.length ? { tools } : {}),

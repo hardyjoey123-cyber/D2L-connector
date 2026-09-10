@@ -577,6 +577,36 @@ or `JARVIS_DAILY_TRADE_USD`, which are enforced in code afterwards, and they
 cannot change anything outside trading — the assistant is told as much when
 they are handed to it.
 
+## What it costs to run
+
+Voice turns are small but frequent, and the expensive part is not the sentence
+you said — it is everything resent with it. Every turn carries the tool
+definitions, the voice rules, the trading rulebook, and the whole conversation
+so far, because the API is stateless.
+
+Two things keep that in check:
+
+**The stable prefix is cached.** Requests set `cache_control: {type: "ephemeral"}`,
+so the tools and system prompt are read back at roughly a tenth of the price
+instead of paid for in full every turn. Editing the rulebook or switching
+persona invalidates it once, then it re-warms.
+
+**The model is yours to choose.** `JARVIS_MODEL`, or the picker in Settings:
+
+| Model | Input $/MTok | Output $/MTok |
+| --- | --- | --- |
+| `claude-opus-5` (default) | $5 | $25 |
+| `claude-sonnet-5` | $2 | $10 |
+| `claude-haiku-4-5` | $1 | $5 |
+
+Haiku is a fifth of Opus and perfectly capable of "what's due Thursday" — for a
+voice assistant answering in one to three sentences, the difference is mostly
+invisible. Note that Haiku does not accept `output_config.effort`, so the server
+omits it for models that reject it rather than failing the request.
+
+Effort is already dialled down (`JARVIS_EFFORT`, default `low`): a voice reply
+that arrives two seconds late feels broken however good it is.
+
 ## Settings
 
 Most of what you'd want to change lives in the **Settings** panel in the app
