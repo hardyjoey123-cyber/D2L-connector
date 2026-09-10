@@ -1,13 +1,20 @@
 /**
- * Voice-initiated trading, structured so speech cannot place an order.
+ * Voice-initiated trading.
  *
- * The model gets one tool, `propose_trade`, which places nothing — it records
- * an intent and returns. The order only reaches the broker when a person types
- * the ticker symbol to confirm, at which point this module makes the call
- * itself through the MCP client. Speech recognition mishears words; that is a
- * fact about the input, not a bug to be fixed, so the design assumes it.
+ * The model never places an order. It calls `propose_trade`, which records an
+ * intent; placement happens here, in one of three modes:
  *
- * Off unless JARVIS_TRADING=enabled.
+ *   typed     — a person types the ticker on screen. Nothing is placed without it.
+ *   countdown — hands-free. The order is announced and placed after a few
+ *               seconds unless cancelled, by voice, key or button.
+ *   none      — placed immediately.
+ *
+ * The modes exist because "no approval" and "no safeguard" are different asks.
+ * Speech recognition mishears words; a countdown keeps the flow hands-free
+ * while still leaving somewhere for a misheard order to be stopped. `none`
+ * removes that, and is documented as doing so.
+ *
+ * Off entirely unless JARVIS_TRADING=enabled.
  */
 import crypto from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
@@ -19,6 +26,8 @@ import { buildOrderArgs, OrderMappingError, type OrderIntent } from "./order-map
 const CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 const MAX_PENDING = 8;
 
+export type ConfirmMode = "typed" | "countdown" | "none";
+
 export class TradingError extends Error {}
 
 export interface PendingTrade {
@@ -26,38 +35,97 @@ export interface PendingTrade {
   intent: OrderIntent;
   summary: string;
   createdAt: number;
+  /** Set in countdown mode: when this order places itself. */
+  placesAt?: number;
 }
 
 export interface TradingConfig {
   enabled: boolean;
+  confirmMode: ConfirmMode;
+  countdownSeconds: number;
   maxNotionalUsd: number;
+  /** Ceiling on everything placed today, across orders. 0 disables it. */
+  dailyLimitUsd: number;
   accountNumber?: string;
 }
 
 export function readTradingConfig(): TradingConfig {
+  const mode = (process.env.JARVIS_TRADING_CONFIRM?.trim().toLowerCase() ??
+    "typed") as ConfirmMode;
   return {
     enabled: process.env.JARVIS_TRADING?.trim().toLowerCase() === "enabled",
+    confirmMode: mode === "countdown" || mode === "none" ? mode : "typed",
+    countdownSeconds: Math.max(0, Number(process.env.JARVIS_TRADING_COUNTDOWN ?? 8)),
     // A per-order ceiling that a misheard number cannot talk its way past.
     maxNotionalUsd: Number(process.env.JARVIS_MAX_TRADE_USD ?? 200),
+    // The backstop that matters most without a human in the loop: one bad
+    // afternoon is bounded even if every individual order looks reasonable.
+    dailyLimitUsd: Number(process.env.JARVIS_DAILY_TRADE_USD ?? 1000),
     accountNumber: process.env.JARVIS_TRADING_ACCOUNT?.trim() || undefined,
   };
 }
 
 const SYMBOL = /^[A-Z]{1,5}$/;
 
+export interface PlacementOutcome {
+  id: string;
+  summary: string;
+  placed: boolean;
+  error?: string;
+  result?: unknown;
+}
+
 export function createTrading(mcpUrl: string, config: TradingConfig) {
   const client = new McpClient(mcpUrl);
   const pending = new Map<string, PendingTrade>();
+  const timers = new Map<string, NodeJS.Timeout>();
+  /** Listeners for orders that place themselves, so the page can be told. */
+  const watchers = new Set<(outcome: PlacementOutcome) => void>();
+
+  let spentToday = 0;
+  let spendDay = new Date().toDateString();
+
+  function today(): string {
+    return new Date().toDateString();
+  }
+
+  function spendSoFar(): number {
+    if (spendDay !== today()) {
+      spendDay = today();
+      spentToday = 0;
+    }
+    return spentToday;
+  }
+
+  /** Only dollar-denominated orders can be counted before they fill. */
+  function recordSpend(intent: OrderIntent): void {
+    const known = estimatedCost(intent);
+    if (known !== undefined) spentToday = spendSoFar() + known;
+  }
+
+  function estimatedCost(intent: OrderIntent): number | undefined {
+    if (intent.notional !== undefined) return intent.notional;
+    if (intent.limitPrice !== undefined && intent.quantity !== undefined) {
+      return intent.quantity * intent.limitPrice;
+    }
+    return undefined;
+  }
 
   const definitions: Anthropic.Beta.BetaToolUnion[] = [
     {
       name: "propose_trade",
       description:
-        "Proposes a stock trade for the user to confirm. This does NOT place an order — it " +
-        "shows the details on screen and waits for the user to type the ticker symbol to " +
-        "approve. Say out loud what you are proposing and that it needs confirming on screen. " +
-        "Only use this when the user clearly asked to buy or sell a specific stock; never " +
-        "infer a trade from discussion of one.",
+        config.confirmMode === "typed"
+          ? "Proposes a stock trade for the user to confirm. This does NOT place an order — it " +
+            "shows the details on screen and waits for the user to type the ticker symbol to " +
+            "approve. Say what you are proposing and that it needs confirming on screen. Only " +
+            "use this when the user clearly asked to buy or sell a specific stock; never infer " +
+            "a trade from discussion of one."
+          : "Places a stock trade in the user's brokerage account. This spends real money and " +
+            "cannot be undone. Say clearly and immediately what is being bought or sold, the " +
+            "size, and that it can be cancelled by saying cancel. Only use this when the user " +
+            "clearly asked to buy or sell a specific stock; never infer a trade from discussion " +
+            "of one, and never place one they did not ask for.",
       input_schema: {
         type: "object",
         required: ["symbol", "side"],
@@ -73,7 +141,7 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
     },
   ];
 
-  /** Rejects anything outside the account's hard rules before a human ever sees it. */
+  /** Rejects anything outside the account's hard rules before it can be placed. */
   function validate(input: Record<string, unknown>): OrderIntent {
     const symbol = String(input.symbol ?? "").trim().toUpperCase();
     if (!SYMBOL.test(symbol)) {
@@ -109,18 +177,7 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
       throw new TradingError("A limit order needs a positive limit price.");
     }
 
-    // The cap is only checkable directly for dollar orders; for share counts it
-    // needs a price, which a limit order supplies and a market order does not.
-    const estimated =
-      notional ?? (limitPrice !== undefined && quantity !== undefined ? quantity * limitPrice : undefined);
-    if (estimated !== undefined && estimated > config.maxNotionalUsd) {
-      throw new TradingError(
-        `That is about $${estimated.toFixed(0)}, over the $${config.maxNotionalUsd} per-order limit. ` +
-          "Raise JARVIS_MAX_TRADE_USD to allow more."
-      );
-    }
-
-    return {
+    const intent: OrderIntent = {
       symbol,
       side,
       quantity,
@@ -129,6 +186,25 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
       limitPrice,
       accountNumber: config.accountNumber,
     };
+
+    // Buys spend; sells raise cash, so only buys are measured against the caps.
+    const estimated = estimatedCost(intent);
+    if (side === "buy" && estimated !== undefined) {
+      if (estimated > config.maxNotionalUsd) {
+        throw new TradingError(
+          `That is about $${estimated.toFixed(0)}, over the $${config.maxNotionalUsd} per-order ` +
+            "limit. Raise JARVIS_MAX_TRADE_USD to allow more."
+        );
+      }
+      if (config.dailyLimitUsd > 0 && spendSoFar() + estimated > config.dailyLimitUsd) {
+        throw new TradingError(
+          `That would take today's buying to about $${(spendSoFar() + estimated).toFixed(0)}, ` +
+            `over the $${config.dailyLimitUsd} daily limit. Nothing was placed.`
+        );
+      }
+    }
+
+    return intent;
   }
 
   function describe(intent: OrderIntent): string {
@@ -141,55 +217,16 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
     return `${intent.side === "buy" ? "Buy" : "Sell"} ${size} ${intent.symbol}${price}`;
   }
 
-  /** Records the intent and returns what the screen should ask about. */
-  function propose(input: Record<string, unknown>): PendingTrade {
-    const intent = validate(input);
-    // Drop anything stale so an old proposal can't be confirmed by accident.
+  function sweepExpired(): void {
     for (const [id, trade] of pending) {
-      if (Date.now() - trade.createdAt > CONFIRMATION_TTL_MS) pending.delete(id);
+      if (trade.placesAt === undefined && Date.now() - trade.createdAt > CONFIRMATION_TTL_MS) {
+        pending.delete(id);
+      }
     }
-    if (pending.size >= MAX_PENDING) {
-      throw new TradingError("Too many unconfirmed proposals. Confirm or dismiss one first.");
-    }
-
-    const trade: PendingTrade = {
-      id: crypto.randomUUID(),
-      intent,
-      summary: describe(intent),
-      createdAt: Date.now(),
-    };
-    pending.set(trade.id, trade);
-    return trade;
   }
 
-  function get(id: string): PendingTrade | undefined {
-    const trade = pending.get(id);
-    if (!trade) return undefined;
-    if (Date.now() - trade.createdAt > CONFIRMATION_TTL_MS) {
-      pending.delete(id);
-      return undefined;
-    }
-    return trade;
-  }
-
-  function dismiss(id: string): void {
-    pending.delete(id);
-  }
-
-  /**
-   * Places the order — the only path that reaches the broker, and it needs the
-   * symbol typed exactly. Reviews first when the server offers a review tool,
-   * so an order the broker would reject fails before it is live.
-   */
-  async function confirm(id: string, typed: string): Promise<unknown> {
-    const trade = get(id);
-    if (!trade) {
-      throw new TradingError("That proposal has expired. Ask again if you still want it.");
-    }
-    if (typed.trim().toUpperCase() !== trade.intent.symbol) {
-      throw new TradingError(`Type ${trade.intent.symbol} exactly to confirm.`);
-    }
-
+  /** The single path to the broker. Everything else routes through here. */
+  async function place(trade: PendingTrade): Promise<unknown> {
     const definitions = await client.listToolDefinitions();
     const placeTool = definitions.find((tool) => /^place_equity_order$/i.test(tool.name));
     if (!placeTool) {
@@ -213,11 +250,129 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
     }
 
     const result = await client.callTool(placeTool.name, args);
-    pending.delete(id);
+    recordSpend(trade.intent);
     return result;
   }
 
-  return { definitions, propose, confirm, get, dismiss };
+  function announce(outcome: PlacementOutcome): void {
+    for (const watcher of watchers) {
+      try {
+        watcher(outcome);
+      } catch {
+        /* a failing listener must not affect the order */
+      }
+    }
+  }
+
+  function cancelTimer(id: string): void {
+    const timer = timers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      timers.delete(id);
+    }
+  }
+
+  /**
+   * Records the intent and, depending on the mode, places it now, schedules it,
+   * or leaves it for a typed confirmation.
+   */
+  async function propose(
+    input: Record<string, unknown>
+  ): Promise<{ trade: PendingTrade; mode: ConfirmMode; result?: unknown }> {
+    const intent = validate(input);
+    sweepExpired();
+    if (pending.size >= MAX_PENDING) {
+      throw new TradingError("Too many orders in flight. Wait for them to settle.");
+    }
+
+    const trade: PendingTrade = {
+      id: crypto.randomUUID(),
+      intent,
+      summary: describe(intent),
+      createdAt: Date.now(),
+    };
+
+    if (config.confirmMode === "none") {
+      const result = await place(trade);
+      return { trade, mode: "none", result };
+    }
+
+    if (config.confirmMode === "countdown") {
+      trade.placesAt = Date.now() + config.countdownSeconds * 1000;
+      pending.set(trade.id, trade);
+      timers.set(
+        trade.id,
+        setTimeout(() => {
+          timers.delete(trade.id);
+          if (!pending.has(trade.id)) return; // cancelled in the meantime
+          pending.delete(trade.id);
+          place(trade)
+            .then((result) =>
+              announce({ id: trade.id, summary: trade.summary, placed: true, result })
+            )
+            .catch((error) =>
+              announce({
+                id: trade.id,
+                summary: trade.summary,
+                placed: false,
+                error: error instanceof Error ? error.message : String(error),
+              })
+            );
+        }, config.countdownSeconds * 1000)
+      );
+      return { trade, mode: "countdown" };
+    }
+
+    pending.set(trade.id, trade);
+    return { trade, mode: "typed" };
+  }
+
+  function get(id: string): PendingTrade | undefined {
+    const trade = pending.get(id);
+    if (!trade) return undefined;
+    if (trade.placesAt === undefined && Date.now() - trade.createdAt > CONFIRMATION_TTL_MS) {
+      pending.delete(id);
+      return undefined;
+    }
+    return trade;
+  }
+
+  /** Stops a pending order, whether it was waiting on a person or a timer. */
+  function dismiss(id: string): boolean {
+    cancelTimer(id);
+    return pending.delete(id);
+  }
+
+  /** Typed confirmation: requires the ticker, exactly. */
+  async function confirm(id: string, typed: string): Promise<unknown> {
+    const trade = get(id);
+    if (!trade) {
+      throw new TradingError("That proposal has expired. Ask again if you still want it.");
+    }
+    if (typed.trim().toUpperCase() !== trade.intent.symbol) {
+      throw new TradingError(`Type ${trade.intent.symbol} exactly to confirm.`);
+    }
+    cancelTimer(id);
+    pending.delete(id);
+    return place(trade);
+  }
+
+  function onPlacement(watcher: (outcome: PlacementOutcome) => void): () => void {
+    watchers.add(watcher);
+    return () => watchers.delete(watcher);
+  }
+
+  return {
+    definitions,
+    propose,
+    confirm,
+    dismiss,
+    get,
+    onPlacement,
+    mode: config.confirmMode,
+    countdownSeconds: config.countdownSeconds,
+    spentToday: spendSoFar,
+  };
 }
 
 export type Trading = ReturnType<typeof createTrading>;

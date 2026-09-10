@@ -258,10 +258,21 @@ if (tradingConfig.enabled && !MCP_URL) {
   console.warn("JARVIS_TRADING is enabled but JARVIS_MCP_URL is not set, so trading is off.");
 }
 if (trading) {
+  const gate = {
+    typed: "each confirmed by typing the ticker",
+    countdown: `each placed after ${tradingConfig.countdownSeconds}s unless cancelled`,
+    none: "placed immediately, with no confirmation step",
+  }[tradingConfig.confirmMode];
   console.log(
-    `Trading enabled: proposals only, $${tradingConfig.maxNotionalUsd} per order, ` +
-      "each confirmed by typing the ticker."
+    `Trading enabled: $${tradingConfig.maxNotionalUsd} per order, ` +
+      `$${tradingConfig.dailyLimitUsd} per day, ${gate}.`
   );
+  if (tradingConfig.confirmMode === "none") {
+    console.warn(
+      "  JARVIS_TRADING_CONFIRM=none: a misheard word becomes a real order with " +
+        "nothing in between."
+    );
+  }
 }
 
 /** null unless Brightspace is configured in .env. */
@@ -553,24 +564,37 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
                 if (!useTrading || !trading) {
                   throw new TradingError("Trading is not enabled.");
                 }
-                const proposal = trading.propose(input);
-                // The page renders the confirmation. The model is told only
-                // that it was shown — never that anything was placed, because
-                // it must not be able to claim an outcome it cannot see.
+                const { trade, mode, result } = await trading.propose(input);
                 sseSend(res, {
                   type: "confirm",
-                  id: proposal.id,
-                  summary: proposal.summary,
-                  symbol: proposal.intent.symbol,
+                  id: trade.id,
+                  summary: trade.summary,
+                  symbol: trade.intent.symbol,
+                  mode,
+                  placesAt: trade.placesAt ?? null,
+                  countdownSeconds: trading.countdownSeconds,
                 });
+
+                // The model is told the outcome only when there is one it could
+                // not misreport: in typed and countdown modes it does not learn
+                // whether the order went through, so it cannot claim it did.
+                const status =
+                  mode === "none"
+                    ? "Placed."
+                    : mode === "countdown"
+                      ? `Placing in ${trading.countdownSeconds} seconds unless the user ` +
+                        "cancels. Say what is being placed and that saying cancel stops it. " +
+                        "You will not be told the outcome."
+                      : "Awaiting the user's typed confirmation on screen. Nothing has been " +
+                        "placed, and you will not be told the outcome.";
+
                 return {
                   type: "tool_result",
                   tool_use_id: call.id,
                   content: JSON.stringify({
-                    shown: proposal.summary,
-                    status:
-                      "Awaiting the user's typed confirmation on screen. Nothing has been " +
-                      "placed, and you will not be told the outcome.",
+                    order: trade.summary,
+                    status,
+                    ...(mode === "none" && result !== undefined ? { result } : {}),
                   }),
                 };
               }
@@ -687,9 +711,39 @@ async function handleConfirm(req: http.IncomingMessage, res: http.ServerResponse
   }
 }
 
+/**
+ * A standing stream for things that happen outside a turn — chiefly a
+ * countdown order placing itself after the conversation has moved on.
+ */
+function handleEvents(req: http.IncomingMessage, res: http.ServerResponse) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  res.write(": connected\n\n");
+
+  const unsubscribe = trading?.onPlacement((outcome) => {
+    sseSend(res, { type: "placement", ...outcome });
+  });
+
+  // Proxies and browsers drop an idle stream; a comment costs nothing.
+  const keepAlive = setInterval(() => res.write(": ping\n\n"), 25_000);
+
+  req.on("close", () => {
+    clearInterval(keepAlive);
+    unsubscribe?.();
+  });
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/api/chat") {
     void handleChat(req, res);
+    return;
+  }
+  if (req.method === "GET" && req.url === "/api/events") {
+    handleEvents(req, res);
     return;
   }
   if (req.method === "POST" && req.url === "/api/confirm") {
@@ -719,7 +773,10 @@ const server = http.createServer((req, res) => {
           account: mcpEnabled,
           accountSignedIn: accountSessionAvailable(),
           trading: trading !== null,
+          tradingMode: trading?.mode ?? null,
+          countdownSeconds: trading?.countdownSeconds ?? 0,
           maxTradeUsd: tradingConfig.maxNotionalUsd,
+          dailyTradeUsd: tradingConfig.dailyLimitUsd,
         })
       );
     return;
