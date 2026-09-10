@@ -62,7 +62,7 @@ async function printAccounts(client: McpClient): Promise<void> {
     console.log(`  agentic_allowed     ${allowed === undefined ? "(not stated)" : allowed}`);
     if (account.type) console.log(`  type                ${account.type}`);
     if (allowed === false) {
-      console.log("  This account rejects agent-placed orders.");
+      console.log("  Not tradable by this sign-in (it may be tradable by another app).");
     }
   }
   console.log("-".repeat(40));
@@ -75,13 +75,17 @@ async function printAccounts(client: McpClient): Promise<void> {
         "brokers they differ.\n"
     );
   } else {
-    // No amount of code gets past this one, so say so rather than letting it
-    // surface later as a rejected order nobody can explain.
+    // This flag is caller-relative: it answers "may THIS client trade here",
+    // not "does this account allow agents at all". Saying the latter sends
+    // people off to enable something that is already on.
     console.log(
-      `\nNone of these ${accounts.length} accounts has agentic_allowed=true, so the\n` +
-        "broker will reject an agent-placed order in every one of them. This is a\n" +
-        "setting on the broker's side, not here — agent trading has to be enabled\n" +
-        "for the account before JARVIS can place anything.\n"
+      `\nNone of these ${accounts.length} accounts is tradable by this sign-in, so the broker\n` +
+        "will reject an order in every one of them.\n\n" +
+        "This is about which app is asking, not about the account. The same\n" +
+        "account can be tradable for one agent and not another, so an account\n" +
+        "you already trade from elsewhere can still show up unavailable here.\n" +
+        "Re-run `npm run account:login` and grant this app the account you want\n" +
+        "it to trade in.\n"
     );
   }
 }
