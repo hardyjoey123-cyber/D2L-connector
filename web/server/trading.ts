@@ -210,6 +210,15 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
     if (orderType === "limit" && (!Number.isFinite(limitPrice) || (limitPrice ?? 0) <= 0)) {
       throw new TradingError("A limit order needs a positive limit price.");
     }
+    // Brokers size a dollar order from the live price, which a limit order does
+    // not have — Robinhood declares its dollar field market-only. Catch it here
+    // rather than letting the broker reject it after the order was announced.
+    if (orderType === "limit" && notional !== undefined) {
+      throw new TradingError(
+        "A limit order has to be a number of shares, not a dollar amount. " +
+          "Say how many shares, or place it at market."
+      );
+    }
 
     const thesis = String(input.thesis ?? "").trim();
     const signalType = String(input.signalType ?? "").trim().toLowerCase();
