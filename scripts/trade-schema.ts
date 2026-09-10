@@ -48,14 +48,16 @@ async function printAccounts(client: McpClient): Promise<void> {
   const accounts = extractAccounts(payload);
   if (!accounts.length) {
     console.log("No accounts came back. Raw response:");
-    console.log(`${JSON.stringify(payload).slice(0, 600)}\n`);
+    console.log(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
 
   for (const account of accounts) {
     const allowed = account.agentic_allowed;
     console.log("-".repeat(40));
-    console.log(`  account_number      ${account.account_number ?? "(none)"}   <- JARVIS_TRADING_ACCOUNT`);
+    // The marker points only at an account that could actually take an order.
+    const usable = allowed === true ? "   <- JARVIS_TRADING_ACCOUNT" : "";
+    console.log(`  account_number      ${account.account_number ?? "(none)"}${usable}`);
     console.log(`  rhs_account_number  ${account.rhs_account_number ?? "(none)"}`);
     console.log(`  agentic_allowed     ${allowed === undefined ? "(not stated)" : allowed}`);
     if (account.type) console.log(`  type                ${account.type}`);
@@ -64,11 +66,24 @@ async function printAccounts(client: McpClient): Promise<void> {
     }
   }
   console.log("-".repeat(40));
-  console.log(
-    "\nPut the account_number of an agentic_allowed account in .env as\n" +
-      "JARVIS_TRADING_ACCOUNT. Equity orders use account_number, not\n" +
-      "rhs_account_number — they are often different.\n"
-  );
+
+  const tradeable = accounts.filter((account) => account.agentic_allowed === true);
+  if (tradeable.length) {
+    console.log(
+      `\nPut this in .env:  JARVIS_TRADING_ACCOUNT=${tradeable[0].account_number}\n` +
+        "Equity orders use account_number, not rhs_account_number — on some\n" +
+        "brokers they differ.\n"
+    );
+  } else {
+    // No amount of code gets past this one, so say so rather than letting it
+    // surface later as a rejected order nobody can explain.
+    console.log(
+      `\nNone of these ${accounts.length} accounts has agentic_allowed=true, so the\n` +
+        "broker will reject an agent-placed order in every one of them. This is a\n" +
+        "setting on the broker's side, not here — agent trading has to be enabled\n" +
+        "for the account before JARVIS can place anything.\n"
+    );
+  }
 }
 
 interface AccountRow {
@@ -78,15 +93,36 @@ interface AccountRow {
   type?: string;
 }
 
-/** The shape varies: a bare array, or one wrapped in results/accounts/data. */
-function extractAccounts(payload: unknown): AccountRow[] {
-  const seen = payload as Record<string, unknown> | unknown[] | null;
-  if (Array.isArray(seen)) return seen as AccountRow[];
-  if (seen && typeof seen === "object") {
-    for (const key of ["results", "accounts", "data", "items"]) {
-      const value = (seen as Record<string, unknown>)[key];
-      if (Array.isArray(value)) return value as AccountRow[];
+/**
+ * Finds the account list wherever the server chose to put it.
+ *
+ * Guessing at wrapper key names is a losing game — this one nests it under
+ * data.accounts, the next will pick something else. So look for the shape
+ * instead: the first array whose entries carry an account number is the list,
+ * however deeply it is buried.
+ */
+function extractAccounts(payload: unknown, depth = 0): AccountRow[] {
+  if (depth > 6 || payload === null || typeof payload !== "object") return [];
+
+  if (Array.isArray(payload)) {
+    const rows = payload.filter(
+      (item): item is AccountRow =>
+        item !== null &&
+        typeof item === "object" &&
+        ("account_number" in item || "rhs_account_number" in item)
+    );
+    if (rows.length) return rows;
+    // An array of wrappers rather than of accounts.
+    for (const item of payload) {
+      const found = extractAccounts(item, depth + 1);
+      if (found.length) return found;
     }
+    return [];
+  }
+
+  for (const value of Object.values(payload as Record<string, unknown>)) {
+    const found = extractAccounts(value, depth + 1);
+    if (found.length) return found;
   }
   return [];
 }
