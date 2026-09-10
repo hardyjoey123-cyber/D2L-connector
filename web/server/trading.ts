@@ -20,6 +20,7 @@ import crypto from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 
 import { McpClient } from "../../src/tools/mcp-client.js";
+import { describeAccount, fetchAccounts, tradableAccounts } from "../../src/tools/accounts.js";
 import { buildOrderArgs, OrderMappingError, type OrderIntent } from "./order-mapping.js";
 import { logPlacement } from "./trade-log.js";
 
@@ -424,6 +425,65 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
     return place(trade);
   }
 
+  /**
+   * Checks at start-up that the configured account can actually take an order.
+   *
+   * Without this the first sign of a wrong account number is a rejection in the
+   * middle of a spoken trade — the worst possible moment to discover a config
+   * mistake. It is advisory only: it never blocks start-up and never throws,
+   * because a broker that is briefly unreachable should not stop the assistant
+   * answering questions about coursework.
+   */
+  async function preflight(): Promise<string[]> {
+    let accounts;
+    try {
+      accounts = await fetchAccounts(client);
+    } catch (error) {
+      return [
+        `  Could not check the trading account: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ];
+    }
+    if (!accounts.length) return []; // nothing to check against
+
+    const tradable = tradableAccounts(accounts);
+    const configured = config.accountNumber;
+
+    if (!configured) {
+      return tradable.length
+        ? [
+            "  JARVIS_TRADING_ACCOUNT is not set, so no order can be placed.",
+            `  Set it to ${describeAccount(tradable[0])}.`,
+          ]
+        : ["  JARVIS_TRADING_ACCOUNT is not set, so no order can be placed."];
+    }
+
+    const match = accounts.find((account) => account.account_number === configured);
+    if (!match) {
+      return [
+        `  JARVIS_TRADING_ACCOUNT is ${configured}, which this sign-in cannot see.`,
+        tradable.length
+          ? `  It can trade in ${describeAccount(tradable[0])}.`
+          : "  Run `npm run account:login` and grant the account you want traded.",
+      ];
+    }
+
+    if (match.agentic_allowed === true) {
+      return [`  Trading account ${describeAccount(match)} confirmed.`];
+    }
+
+    // The flag is caller-relative, so this is about which app signed in — not
+    // about the account, which may well be agent-enabled for something else.
+    return [
+      `  ${describeAccount(match)} is not tradable by this sign-in, so every order will`,
+      "  be rejected. This is about which app is asking, not the account itself.",
+      tradable.length
+        ? `  This sign-in can trade in ${describeAccount(tradable[0])}.`
+        : "  Run `npm run account:login` and grant it the account you want traded.",
+    ];
+  }
+
   function onPlacement(watcher: (outcome: PlacementOutcome) => void): () => void {
     watchers.add(watcher);
     return () => watchers.delete(watcher);
@@ -436,6 +496,7 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
     dismiss,
     get,
     onPlacement,
+    preflight,
     mode: config.confirmMode,
     countdownSeconds: config.countdownSeconds,
     spentToday: spendSoFar,

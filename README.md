@@ -503,7 +503,31 @@ hardcoded field names — "quantity" and "amount" are both plausible names for
 both shares and dollars, and only the schema says which is which. A required
 field that cannot be filled refuses the order instead of sending a partial one.
 
-`npm run trade:schema` prints those schemas and places nothing.
+`npm run trade:schema` lists the accounts this sign-in can trade in and prints
+those schemas. It places nothing.
+
+### Which account, and whether this app may trade in it
+
+Brokers grant agent access **per app**, not per account. The tradability flag
+Robinhood returns is caller-relative: it answers "may the client that is asking
+trade here", not "does this account allow agents at all". So an account you
+already trade from elsewhere can come back unavailable here simply because this
+is a different OAuth client — and telling you to go enable it would send you to
+a setting that is already on. `npm run account:login` is what grants this app an
+account.
+
+Because getting that wrong otherwise surfaces as a rejection in the middle of a
+spoken trade, the server checks at start-up and says one of:
+
+```
+  Trading account 652372665 "Agentic" confirmed.
+  652372665 "Agentic" is not tradable by this sign-in, so every order will be rejected.
+  JARVIS_TRADING_ACCOUNT is 999999999, which this sign-in cannot see.
+```
+
+The check is advisory: it never blocks start-up and never fails a request. A
+broker that is briefly unreachable should not stop the assistant answering a
+question about coursework.
 
 ### The trade log
 

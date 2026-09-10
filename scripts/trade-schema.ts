@@ -15,6 +15,7 @@ import "dotenv/config";
 
 import { McpClient } from "../src/tools/mcp-client.js";
 import { accountSessionAvailable } from "../src/tools/account-session.js";
+import { extractAccounts, tradableAccounts, type AccountRow } from "../src/tools/accounts.js";
 
 const MCP_URL = process.env.JARVIS_MCP_URL?.trim();
 
@@ -67,7 +68,7 @@ async function printAccounts(client: McpClient): Promise<void> {
   }
   console.log("-".repeat(40));
 
-  const tradeable = accounts.filter((account) => account.agentic_allowed === true);
+  const tradeable = tradableAccounts(accounts);
   if (tradeable.length) {
     console.log(
       `\nPut this in .env:  JARVIS_TRADING_ACCOUNT=${tradeable[0].account_number}\n` +
@@ -88,47 +89,6 @@ async function printAccounts(client: McpClient): Promise<void> {
         "it to trade in.\n"
     );
   }
-}
-
-interface AccountRow {
-  account_number?: string;
-  rhs_account_number?: string;
-  agentic_allowed?: boolean;
-  type?: string;
-}
-
-/**
- * Finds the account list wherever the server chose to put it.
- *
- * Guessing at wrapper key names is a losing game — this one nests it under
- * data.accounts, the next will pick something else. So look for the shape
- * instead: the first array whose entries carry an account number is the list,
- * however deeply it is buried.
- */
-function extractAccounts(payload: unknown, depth = 0): AccountRow[] {
-  if (depth > 6 || payload === null || typeof payload !== "object") return [];
-
-  if (Array.isArray(payload)) {
-    const rows = payload.filter(
-      (item): item is AccountRow =>
-        item !== null &&
-        typeof item === "object" &&
-        ("account_number" in item || "rhs_account_number" in item)
-    );
-    if (rows.length) return rows;
-    // An array of wrappers rather than of accounts.
-    for (const item of payload) {
-      const found = extractAccounts(item, depth + 1);
-      if (found.length) return found;
-    }
-    return [];
-  }
-
-  for (const value of Object.values(payload as Record<string, unknown>)) {
-    const found = extractAccounts(value, depth + 1);
-    if (found.length) return found;
-  }
-  return [];
 }
 
 async function main() {

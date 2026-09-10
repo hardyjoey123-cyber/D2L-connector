@@ -320,6 +320,12 @@ if (trading) {
       : `  No trading rules yet. Open ${tradingRulesPath} and paste your bot's rules in ` +
         "to have them followed."
   );
+
+  // Advisory, and deliberately not awaited: the interface should come up even
+  // if the broker is slow or down.
+  void trading.preflight().then((lines) => {
+    for (const line of lines) console.log(line);
+  });
 }
 
 /** null unless Brightspace is configured in .env. */
