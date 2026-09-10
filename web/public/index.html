@@ -215,6 +215,24 @@
       </div>
     </div>
 
+    <!-- Hands-free placement. Deliberately not a modal: the microphone stays
+         open so "cancel" works, and the visualizer stays visible. -->
+    <div class="placing" id="placing" hidden role="alert">
+      <div class="placing__track"><span class="placing__fill" id="placing-fill"></span></div>
+      <div class="placing__row">
+        <div>
+          <p class="placing__eyebrow" id="placing-eyebrow">
+            Placing in <span id="placing-count">8</span>s
+          </p>
+          <p class="placing__summary" id="placing-summary"></p>
+        </div>
+        <button class="ctl placing__cancel" id="placing-cancel" type="button">Cancel</button>
+      </div>
+      <p class="placing__hint" id="placing-hint">
+        Say &ldquo;cancel&rdquo;, press <kbd>Esc</kbd>, or use the button.
+      </p>
+    </div>
+
     <div class="toast" id="toast" role="alert" hidden></div>
 
     <script type="module" src="js/app.js"></script>

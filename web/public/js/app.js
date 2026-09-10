@@ -55,6 +55,13 @@ const el = {
   confirmError: document.getElementById("confirm-error"),
   confirmPlace: document.getElementById("confirm-place"),
   confirmCancel: document.getElementById("confirm-cancel"),
+  placing: document.getElementById("placing"),
+  placingFill: document.getElementById("placing-fill"),
+  placingCount: document.getElementById("placing-count"),
+  placingEyebrow: document.getElementById("placing-eyebrow"),
+  placingSummary: document.getElementById("placing-summary"),
+  placingCancel: document.getElementById("placing-cancel"),
+  placingHint: document.getElementById("placing-hint"),
   settings: document.getElementById("settings"),
   settingsClose: document.getElementById("settings-close"),
   setName: document.getElementById("set-name"),
@@ -112,6 +119,16 @@ const backend = { courses: false, account: false, trading: false };
 
 /** The order currently awaiting a typed confirmation, if any. */
 let awaitingConfirm = null;
+
+/** The order counting down to place itself, if any. See startCountdown. */
+let countdown = null;
+
+/**
+ * What stops a countdown when spoken. Anything that begins like a refusal
+ * counts: an order you did not mean is far worse than a turn you have to
+ * repeat, so this errs towards cancelling.
+ */
+const CANCEL_WORDS = /^\s*(cancel|stop|no|nope|abort|wait|never ?mind|don'?t)\b/i;
 
 /** Pending re-arm of the recognizer, so repeated calls can't stack timers. */
 let listenRetry = null;
@@ -324,6 +341,14 @@ listener.onEnd = (final, mode) => {
   // any other reason is not a silent turn.
   if (!state.engaged || state.mode !== "listening") return;
   if (final) {
+    // "Cancel" during a countdown stops the order rather than starting a turn.
+    // Checked before send so the word is never spent on a question instead.
+    if (countdown && CANCEL_WORDS.test(final)) {
+      setSubtitle(el.subtitleUser, final);
+      cancelCountdown();
+      startListening();
+      return;
+    }
     void send(final);
     return;
   }
@@ -445,7 +470,25 @@ function finishTurn() {
 
 /* --------------------------------------------------- order confirmation */
 
-function showConfirm({ id, summary, symbol }) {
+/**
+ * One SSE event, three very different meanings — the server has already decided
+ * which by the time this runs, so the interface must not imply a gate that
+ * isn't there.
+ */
+function showConfirm(event) {
+  if (event.mode === "countdown") {
+    startCountdown(event);
+    return;
+  }
+  if (event.mode === "none") {
+    appendToLog("assistant", `Order placed: ${event.summary}.`);
+    toast(`Placed: ${event.summary}.`);
+    return;
+  }
+  showTypedConfirm(event);
+}
+
+function showTypedConfirm({ id, summary, symbol }) {
   awaitingConfirm = { id, symbol };
   // Listening while someone types an order is noise at best.
   listener.abort();
@@ -462,6 +505,104 @@ function showConfirm({ id, summary, symbol }) {
 function closeConfirm() {
   awaitingConfirm = null;
   el.confirm.hidden = true;
+}
+
+/* ------------------------------------------------------ hands-free placement */
+
+/**
+ * Shows an order that is going to place itself, and counts it down.
+ *
+ * The clock is the server's: it sends the instant the order places, and the
+ * bar is drained against that rather than against a local timer, so a slow
+ * frame or a backgrounded tab cannot show time that has already run out.
+ * Nothing here places or stops anything on its own — cancelling is a request
+ * to the server, and the outcome arrives on /api/events either way.
+ */
+function startCountdown({ id, summary, symbol, placesAt, countdownSeconds }) {
+  endCountdown();
+  const total = Math.max(1, Number(countdownSeconds) || 1) * 1000;
+  const ends = Number(placesAt) || Date.now() + total;
+  countdown = { id, symbol, summary, ends, total, frame: null, hideTimer: null };
+
+  el.placingSummary.textContent = summary;
+  el.placingEyebrow.innerHTML = 'Placing in <span id="placing-count"></span>s';
+  el.placingCount = document.getElementById("placing-count");
+  el.placingHint.hidden = false;
+  el.placingCancel.hidden = false;
+  el.placingCancel.disabled = false;
+  el.placing.hidden = false;
+
+  const tick = () => {
+    if (!countdown) return;
+    const left = countdown.ends - Date.now();
+    if (left <= 0) {
+      // The server is placing it now. Stop offering a cancel that would arrive
+      // too late to mean anything, and wait for the outcome.
+      el.placingEyebrow.textContent = "Placing…";
+      el.placingFill.style.transform = "scaleX(0)";
+      el.placingCancel.hidden = true;
+      el.placingHint.hidden = true;
+      countdown.frame = null;
+      // If the outcome never arrives, the banner still goes away.
+      countdown.hideTimer = window.setTimeout(endCountdown, 8000);
+      return;
+    }
+    if (el.placingCount) el.placingCount.textContent = String(Math.ceil(left / 1000));
+    el.placingFill.style.transform = `scaleX(${Math.min(1, left / countdown.total)})`;
+    countdown.frame = window.requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function endCountdown() {
+  if (!countdown) return;
+  if (countdown.frame !== null) window.cancelAnimationFrame(countdown.frame);
+  if (countdown.hideTimer !== null) window.clearTimeout(countdown.hideTimer);
+  countdown = null;
+  el.placing.hidden = true;
+}
+
+/** Asks the server to drop the order. Safe to call when nothing is pending. */
+function cancelCountdown() {
+  const pending = countdown;
+  if (!pending) return false;
+  endCountdown();
+  void fetch("/api/dismiss", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: pending.id }),
+  }).catch(() => {});
+  appendToLog("assistant", `Cancelled: ${pending.summary}. Nothing was placed.`);
+  toast("Cancelled. Nothing was placed.");
+  return true;
+}
+
+el.placingCancel?.addEventListener("click", () => cancelCountdown());
+
+/**
+ * Outcomes for orders nobody is waiting on — they place themselves after the
+ * turn is over, so there is no reply left to carry the news.
+ */
+function watchPlacements() {
+  const events = new EventSource("/api/events");
+  events.onmessage = (message) => {
+    let outcome;
+    try {
+      outcome = JSON.parse(message.data);
+    } catch {
+      return;
+    }
+    if (outcome.type !== "placement") return;
+    if (countdown?.id === outcome.id) endCountdown();
+    if (outcome.placed) {
+      appendToLog("assistant", `Order placed: ${outcome.summary}.`);
+      toast(`Placed: ${outcome.summary}.`);
+    } else {
+      // A failure has to be loud: the assistant already said it was placing it.
+      appendToLog("assistant", `Order failed: ${outcome.summary}. ${outcome.error ?? ""}`.trim());
+      toast(`Not placed: ${outcome.error ?? "the broker refused it."}`);
+    }
+  };
 }
 
 function confirmTyped() {
@@ -601,7 +742,9 @@ document.addEventListener("keydown", (event) => {
 
   if (event.key === "Escape") {
     // An order confirmation is dismissed by its own button, so a stray Escape
-    // cannot silently discard it.
+    // cannot silently discard it. A countdown is the opposite: stopping one is
+    // always the safe outcome, so Escape stops it.
+    if (countdown && cancelCountdown()) return;
     if (awaitingConfirm) return;
     if (event.target === el.typedInput) {
       closeTypedInput();
@@ -821,6 +964,9 @@ async function boot() {
 
   // The toggle only appears when the server actually has Brightspace wired up;
   // offering a switch that can't do anything is worse than offering none.
+  // Only worth a standing connection when orders can place themselves.
+  if (backend.trading) watchPlacements();
+
   el.fieldAccount.hidden = !backend.account;
   el.fieldCourses.hidden = !backend.courses;
   el.coursesNote.textContent = backend.courses

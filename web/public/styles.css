@@ -896,3 +896,109 @@ select.field__input option {
   .toast { animation: none; }
   .subtitle { transition-duration: 1ms; }
 }
+
+/* ------------------------------------------------------------ hands-free placement */
+
+/* Not a modal. An order that places itself has to be visible and interruptible
+   without taking the microphone or the visualizer away — a dialog would do both,
+   and the whole point of this mode is that your hands are elsewhere. */
+/* Anchored to the top, not the bottom: the bottom of the screen already holds
+   the typed input and the controls, and an order counting down is not something
+   to stack on top of a button someone might be reaching for. */
+.placing {
+  position: fixed;
+  left: 50%;
+  top: 76px;
+  transform: translateX(-50%);
+  z-index: 8;
+  width: min(460px, calc(100% - 32px));
+  padding: 14px 16px 12px;
+  border-radius: 10px;
+  border: 1px solid hsl(38 90% 60% / 0.5);
+  background: linear-gradient(180deg, #14110a 0%, #0b0a06 100%);
+  box-shadow: 0 20px 60px -18px hsl(38 90% 40% / 0.5);
+  animation: placing-in 220ms var(--ease);
+}
+
+@keyframes placing-in {
+  from { opacity: 0; transform: translate(-50%, -12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.placing__track {
+  height: 2px;
+  margin-bottom: 12px;
+  border-radius: 2px;
+  background: hsl(38 60% 60% / 0.18);
+  overflow: hidden;
+}
+
+/* Drained by script each frame rather than by a CSS animation, so it stays in
+   step with the server's clock instead of drifting away from it. */
+.placing__fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: hsl(38 95% 65%);
+  transform-origin: left center;
+  transform: scaleX(1);
+}
+
+.placing__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.placing__eyebrow {
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: hsl(38 90% 70% / 0.9);
+}
+
+.placing__summary {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+  color: hsl(40 30% 94%);
+}
+
+.placing__cancel {
+  flex: none;
+  color: hsl(38 95% 78%);
+  border-color: hsl(38 90% 60% / 0.55);
+  background: hsl(38 80% 45% / 0.16);
+}
+
+.placing__cancel:hover {
+  color: hsl(38 100% 88%);
+  border-color: hsl(38 95% 65% / 0.9);
+  background: hsl(38 85% 50% / 0.26);
+}
+
+.placing__hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: hsl(40 20% 80% / 0.6);
+}
+
+.placing__hint kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid hsl(40 20% 80% / 0.25);
+}
+
+/* The HUD wraps on a narrow screen, so the banner starts lower. */
+@media (max-width: 560px) {
+  .placing { top: 92px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .placing { animation: none; }
+}
