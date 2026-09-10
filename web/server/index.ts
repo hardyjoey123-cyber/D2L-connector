@@ -20,7 +20,19 @@ import {
   currentAccessToken,
   AccountSessionError,
 } from "../../src/tools/account-session.js";
-import { createTrading, readTradingConfig, TradingError, type Trading } from "./trading.js";
+import {
+  createTrading,
+  readTradingConfig,
+  TradingError,
+  type ConfirmMode,
+  type Trading,
+} from "./trading.js";
+import {
+  ensureRulesFile,
+  loadTradingRules,
+  tradingRulesPath,
+  tradingRulesPrompt,
+} from "./strategy.js";
 
 const PUBLIC_DIR = path.join(projectRoot, "web", "public");
 
@@ -88,11 +100,31 @@ orders, realized profit and loss, quotes and news. Speak numbers the way a perso
 const ACCOUNT_READ_ONLY = `This access is read-only — you cannot place, modify or cancel an
 order. Say so plainly if asked to trade, rather than implying you tried.`;
 
-const TRADING_GUIDANCE = `You can propose a stock trade with propose_trade. It does not place
-anything: it puts the order on screen and the user types the ticker symbol to approve it. Say
-what you are proposing and that it needs confirming on screen. Never say an order was placed —
-you are not told the outcome. Only propose when the user clearly asked to buy or sell a named
-stock; discussing a stock is not asking to trade it.`;
+/**
+ * What propose_trade actually does depends on the confirmation mode, and the
+ * model has to describe it accurately: telling someone to confirm on screen
+ * while the order places itself is worse than saying nothing.
+ */
+const TRADING_GUIDANCE: Record<ConfirmMode, string> = {
+  typed: `You can propose a stock trade with propose_trade. It does not place anything: it
+puts the order on screen and the user types the ticker symbol to approve it. Say what you are
+proposing and that it needs confirming on screen. Never say an order was placed — you are not
+told the outcome. Only propose when the user clearly asked to buy or sell a named stock;
+discussing a stock is not asking to trade it.`,
+
+  countdown: `You can place a stock trade with propose_trade. It spends real money. The order
+is held for a few seconds and then placed unless the user cancels, so the moment you call it,
+say plainly what is being bought or sold and how much, and that saying cancel stops it. Never
+say an order filled — you are not told the outcome. Only place a trade the user clearly asked
+for, naming the stock; discussing a stock is not asking to trade it, and you must never place
+one they did not ask for.`,
+
+  none: `You can place a stock trade with propose_trade. It goes straight to the brokerage,
+spends real money, and cannot be undone or cancelled. Say plainly what was placed and how
+much. Only place a trade the user clearly asked for, naming the stock; discussing a stock is
+not asking to trade it, and you must never place one they did not ask for. If a request is
+ambiguous in any way, ask rather than place.`,
+};
 
 const COURSE_GUIDANCE = `You can look up the user's Brightspace courses, coursework, grades,
 and announcements. Use those tools whenever a question touches their classes rather than
@@ -111,7 +143,14 @@ function buildSystemPrompt(
   if (withCourses) parts.push(COURSE_GUIDANCE);
   if (withAccount) {
     parts.push(ACCOUNT_GUIDANCE);
-    parts.push(withTrading ? TRADING_GUIDANCE : ACCOUNT_READ_ONLY);
+    if (withTrading) {
+      parts.push(TRADING_GUIDANCE[tradingConfig.confirmMode]);
+      // Read per turn: editing the rulebook takes effect on the next question.
+      const rules = loadTradingRules();
+      if (rules) parts.push(tradingRulesPrompt(rules));
+    } else {
+      parts.push(ACCOUNT_READ_ONLY);
+    }
   }
   return parts.join("\n\n");
 }
@@ -273,6 +312,14 @@ if (trading) {
         "nothing in between."
     );
   }
+  ensureRulesFile();
+  const rules = loadTradingRules();
+  console.log(
+    rules
+      ? `  Trading rules loaded from ${tradingRulesPath} (${rules.length} characters).`
+      : `  No trading rules yet. Open ${tradingRulesPath} and paste your bot's rules in ` +
+        "to have them followed."
+  );
 }
 
 /** null unless Brightspace is configured in .env. */

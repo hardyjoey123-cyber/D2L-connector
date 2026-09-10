@@ -456,19 +456,30 @@ design: speech recognition mishears words, and a misheard ticker or quantity
 would be an irreversible trade. Enabling that is a change to a trading rulebook,
 not a change to this file.
 
-## Proposing trades (off by default)
+## Placing trades (off by default)
 
 With `JARVIS_TRADING=enabled` the assistant gains one more tool, and it is
 worth being precise about what it does: **the model cannot place an order.**
 
-`propose_trade` records an intent and returns. The order appears on screen, and
-nothing is sent anywhere until you type the ticker symbol and press the button.
-The server then places it through its own MCP client — a path nothing the model
-says can reach.
+`propose_trade` records an intent and returns. The server places it, through
+its own MCP client — a path nothing the model says can reach. What happens
+between the intent and the order is set by `JARVIS_TRADING_CONFIRM`:
 
-That shape is deliberate. Speech recognition mishears words; this session alone
-produced several examples. A spoken confirmation would inherit the same flaw as
-the instruction it was confirming, so the confirmation is typed instead.
+| Mode | What happens |
+| --- | --- |
+| `typed` (default) | The order appears on screen. Nothing is sent until you type the ticker symbol and press the button. |
+| `countdown` | Hands-free. The assistant says what it is placing, a banner counts down, and the order goes at zero unless you say "cancel", press <kbd>Esc</kbd>, or click Cancel. `JARVIS_TRADING_COUNTDOWN` sets the seconds, default 8. |
+| `none` | Placed immediately, with nothing in between. |
+
+The modes exist because "no approval" and "no safeguard" are different asks.
+Speech recognition mishears words; this session alone produced several examples.
+A typed confirmation does not inherit that flaw, which is why it is the default.
+A countdown does not either — it is a second chance rather than a second
+opinion — while keeping the flow genuinely hands-free. `none` removes both.
+
+In `typed` and `countdown` modes the model is never told whether the order went
+through, so it cannot claim it did. Outcomes reach the page directly over
+`/api/events` instead.
 
 | Guardrail | Behaviour |
 | --- | --- |
@@ -477,8 +488,14 @@ the instruction it was confirming, so the confirmation is typed instead.
 | Order type | Market or limit. A limit without a price is refused. |
 | Size | Shares or dollars, never both, never zero or negative. |
 | Cap | `JARVIS_MAX_TRADE_USD` per order, default $200. |
-| Confirmation | The exact ticker, typed. Proposals expire after five minutes. |
+| Daily cap | `JARVIS_DAILY_TRADE_USD` across all buys in a day, default $1000. Sells raise cash, so they are not counted against it. |
+| Rulebook | Every trade must satisfy `trading-rules.md`, if you have written one. |
+| Confirmation | Per `JARVIS_TRADING_CONFIRM`, above. Typed proposals expire after five minutes. |
 | Review | `review_equity_order` runs first when the server offers it. |
+| Record | Every order sent is appended to `trade-log.md`, whether it succeeded or not. |
+
+The caps are checked in code, after the rulebook, so nothing written in a
+rulebook — or said out loud — can raise them.
 
 The order payload is built from the server's own declared schema rather than
 hardcoded field names — "quantity" and "amount" are both plausible names for
@@ -490,6 +507,31 @@ field that cannot be filled refuses the order instead of sending a partial one.
 **If a trading rulebook governs the account, amend it too.** A trade asked for
 out loud does not originate from whatever signal sources that rulebook requires,
 and enabling this here does not change what the rulebook says.
+
+### Your own trading rules
+
+If you already have a trading bot — a strategy, an SOP, a checklist, a set of
+things it is never allowed to do — that is the part this app does not have, and
+it drops straight in.
+
+The first time the server starts with trading on, it creates `trading-rules.md`
+next to `.env`. Paste your bot's rules into it and save. They are read fresh on
+every question, so an edit takes effect on the next thing you ask; there is
+nothing to restart.
+
+From then on, a trade has to clear those rules before it is proposed at all. Ask
+for something the rules forbid and the assistant says which rule stopped it and
+places nothing.
+
+The file is deliberately **not** part of this repository — like `.env`, it is
+listed in `.gitignore`, so re-downloading the project cannot overwrite what you
+pasted in. `trading-rules.example.md` is the shipped template it starts from.
+Keep the rules elsewhere by pointing `JARVIS_TRADING_RULES` at another path.
+
+Two things the rules cannot do, by design: they cannot raise `JARVIS_MAX_TRADE_USD`
+or `JARVIS_DAILY_TRADE_USD`, which are enforced in code afterwards, and they
+cannot change anything outside trading — the assistant is told as much when
+they are handed to it.
 
 ## Settings
 

@@ -21,6 +21,7 @@ import Anthropic from "@anthropic-ai/sdk";
 
 import { McpClient } from "../../src/tools/mcp-client.js";
 import { buildOrderArgs, OrderMappingError, type OrderIntent } from "./order-mapping.js";
+import { logPlacement } from "./trade-log.js";
 
 /** A proposal is only good for a few minutes; prices move. */
 const CONFIRMATION_TTL_MS = 5 * 60 * 1000;
@@ -249,8 +250,15 @@ export function createTrading(mcpUrl: string, config: TradingConfig) {
       await client.callTool(reviewTool.name, buildOrderArgs(reviewTool.inputSchema, trade.intent));
     }
 
-    const result = await client.callTool(placeTool.name, args);
+    let result: unknown;
+    try {
+      result = await client.callTool(placeTool.name, args);
+    } catch (error) {
+      logPlacement(trade.summary, false, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
     recordSpend(trade.intent);
+    logPlacement(trade.summary, true);
     return result;
   }
 

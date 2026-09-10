@@ -4,3 +4,7 @@ dist/
 .auth/
 *.log
 .DS_Store
+
+# Your own trading rules and the record of what was placed. Never committed.
+trading-rules.md
+trade-log.md
