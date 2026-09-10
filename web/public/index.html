@@ -192,6 +192,29 @@
       </div>
     </aside>
 
+    <!-- Deliberately loud, unlike everything else here: an order confirmation
+         should interrupt rather than blend in. -->
+    <div class="confirm" id="confirm" hidden role="dialog" aria-modal="true"
+         aria-labelledby="confirm-title">
+      <div class="confirm__box">
+        <p class="confirm__eyebrow">Confirm order</p>
+        <p class="confirm__summary" id="confirm-title"></p>
+        <label class="confirm__label" for="confirm-input">
+          Type <strong id="confirm-symbol"></strong> to place it
+        </label>
+        <input class="confirm__input" id="confirm-input" type="text" autocomplete="off"
+               spellcheck="false" maxlength="8" />
+        <p class="confirm__error" id="confirm-error" hidden></p>
+        <div class="confirm__actions">
+          <button class="ctl" id="confirm-cancel" type="button">Cancel</button>
+          <button class="ctl confirm__go" id="confirm-place" type="button">Place order</button>
+        </div>
+        <p class="confirm__note">
+          Placing this is irreversible. Nothing happens until you press Place order.
+        </p>
+      </div>
+    </div>
+
     <div class="toast" id="toast" role="alert" hidden></div>
 
     <script type="module" src="js/app.js"></script>

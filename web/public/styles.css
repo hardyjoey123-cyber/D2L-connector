@@ -742,6 +742,120 @@ select.field__input option {
   outline-offset: 2px;
 }
 
+/* --------------------------------------------------------- order confirmation */
+
+.confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  background: hsl(220 40% 2% / 0.72);
+  backdrop-filter: blur(4px);
+  animation: fade-in 200ms var(--ease);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.confirm__box {
+  width: min(460px, calc(100% - 40px));
+  padding: 28px;
+  border-radius: 10px;
+  /* Amber, not the accent: this is the one thing on screen that must not look
+     like the rest of the interface. */
+  border: 1px solid hsl(38 90% 60% / 0.5);
+  background: linear-gradient(180deg, #12100a 0%, #0a0906 100%);
+  box-shadow: 0 30px 80px -20px hsl(38 90% 40% / 0.45);
+}
+
+.confirm__eyebrow {
+  margin: 0 0 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: hsl(38 90% 70% / 0.9);
+}
+
+.confirm__summary {
+  margin: 0 0 20px;
+  font-size: 20px;
+  line-height: 1.4;
+  font-weight: 400;
+  color: hsl(40 30% 94%);
+}
+
+.confirm__label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: hsl(40 20% 80% / 0.75);
+}
+
+.confirm__label strong {
+  font-family: var(--mono);
+  color: hsl(38 95% 72%);
+  letter-spacing: 0.1em;
+}
+
+.confirm__input {
+  width: 100%;
+  padding: 11px 13px;
+  border-radius: 6px;
+  border: 1px solid hsl(38 60% 60% / 0.35);
+  background: hsl(38 40% 20% / 0.25);
+  color: hsl(40 30% 95%);
+  font-family: var(--mono);
+  font-size: 16px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.confirm__input:focus {
+  outline: none;
+  border-color: hsl(38 90% 65% / 0.8);
+}
+
+.confirm__error {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: hsl(8 90% 72%);
+}
+
+.confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.confirm__go {
+  color: hsl(38 95% 78%);
+  border-color: hsl(38 90% 60% / 0.55);
+  background: hsl(38 80% 45% / 0.16);
+}
+
+.confirm__go:hover {
+  color: hsl(38 100% 88%);
+  border-color: hsl(38 95% 65% / 0.9);
+  background: hsl(38 85% 50% / 0.26);
+}
+
+.confirm__go[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.confirm__note {
+  margin: 16px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: hsl(40 20% 78% / 0.55);
+}
+
 /* ------------------------------------------------------------------- toast */
 
 .toast {

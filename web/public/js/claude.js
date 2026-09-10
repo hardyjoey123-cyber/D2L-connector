@@ -12,7 +12,7 @@
  */
 export async function streamReply(
   messages,
-  { onDelta, onStatus, abortSignal, persona, model, webSearch, courses, account } = {}
+  { onDelta, onStatus, onConfirm, abortSignal, persona, model, webSearch, courses, account } = {}
 ) {
   const response = await fetch("/api/chat", {
     method: "POST",
@@ -58,6 +58,9 @@ export async function streamReply(
       if (event.type === "delta") {
         full += event.text;
         onDelta?.(event.text, full);
+      } else if (event.type === "confirm") {
+        // An order awaiting a typed confirmation. Never placed by this event.
+        onConfirm?.(event);
       } else if (event.type === "status") {
         // e.g. the model went off to search; the page says so rather than
         // sitting in silence.

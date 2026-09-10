@@ -20,6 +20,7 @@ import {
   currentAccessToken,
   AccountSessionError,
 } from "../../src/tools/account-session.js";
+import { createTrading, readTradingConfig, TradingError, type Trading } from "./trading.js";
 
 const PUBLIC_DIR = path.join(projectRoot, "web", "public");
 
@@ -80,10 +81,18 @@ function todayLine(): string {
 }
 
 const ACCOUNT_GUIDANCE = `You can read the user's brokerage account: balances, positions,
-orders, realized profit and loss, quotes and news. This access is read-only — you cannot
-place, modify or cancel an order, and you should say so plainly if asked to trade rather
-than implying you tried. Speak numbers the way a person would: "up about four percent",
-"twelve hundred dollars", not raw decimals.`;
+orders, realized profit and loss, quotes and news. Speak numbers the way a person would:
+"up about four percent", "twelve hundred dollars", not raw decimals.`;
+
+/** Only when trading is off, so the model is never told both things. */
+const ACCOUNT_READ_ONLY = `This access is read-only — you cannot place, modify or cancel an
+order. Say so plainly if asked to trade, rather than implying you tried.`;
+
+const TRADING_GUIDANCE = `You can propose a stock trade with propose_trade. It does not place
+anything: it puts the order on screen and the user types the ticker symbol to approve it. Say
+what you are proposing and that it needs confirming on screen. Never say an order was placed —
+you are not told the outcome. Only propose when the user clearly asked to buy or sell a named
+stock; discussing a stock is not asking to trade it.`;
 
 const COURSE_GUIDANCE = `You can look up the user's Brightspace courses, coursework, grades,
 and announcements. Use those tools whenever a question touches their classes rather than
@@ -94,12 +103,16 @@ asked for the full list.`;
 function buildSystemPrompt(
   persona: string | undefined,
   withCourses: boolean,
-  withAccount: boolean
+  withAccount: boolean,
+  withTrading: boolean
 ): string {
   if (SYSTEM_PROMPT_OVERRIDE) return SYSTEM_PROMPT_OVERRIDE;
   const parts = [persona?.trim() || DEFAULT_PERSONA, VOICE_RULES, todayLine()];
   if (withCourses) parts.push(COURSE_GUIDANCE);
-  if (withAccount) parts.push(ACCOUNT_GUIDANCE);
+  if (withAccount) {
+    parts.push(ACCOUNT_GUIDANCE);
+    parts.push(withTrading ? TRADING_GUIDANCE : ACCOUNT_READ_ONLY);
+  }
   return parts.join("\n\n");
 }
 
@@ -233,6 +246,23 @@ const WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID?.trim();
 const client = new Anthropic(
   WORKSPACE_ID ? { defaultHeaders: { "anthropic-workspace-id": WORKSPACE_ID } } : {}
 );
+
+/**
+ * Voice-initiated trading. Off unless explicitly enabled, and even then the
+ * model only ever proposes — see web/server/trading.ts.
+ */
+const tradingConfig = readTradingConfig();
+const trading: Trading | null =
+  tradingConfig.enabled && MCP_URL ? createTrading(MCP_URL, tradingConfig) : null;
+if (tradingConfig.enabled && !MCP_URL) {
+  console.warn("JARVIS_TRADING is enabled but JARVIS_MCP_URL is not set, so trading is off.");
+}
+if (trading) {
+  console.log(
+    `Trading enabled: proposals only, $${tradingConfig.maxNotionalUsd} per order, ` +
+      "each confirmed by typing the ticker."
+  );
+}
 
 /** null unless Brightspace is configured in .env. */
 const courseTools = createCourseTools();
@@ -421,7 +451,8 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
   const messages: Anthropic.Beta.BetaMessageParam[] = [...request.messages];
   const useCourses = request.courses && courseTools !== null;
   let useAccount = request.account && mcpEnabled;
-  const system = buildSystemPrompt(request.persona, useCourses, useAccount);
+  const useTrading = useAccount && trading !== null;
+  const system = buildSystemPrompt(request.persona, useCourses, useAccount, useTrading);
 
   // Resolved once per turn rather than per round, and a failure here disables
   // the account rather than failing the whole answer — the rest of what was
@@ -443,6 +474,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
   if (request.webSearch) tools.push(webSearchTool(request.model));
   if (useCourses && courseTools) tools.push(...courseTools.definitions);
   if (useAccount) tools.push(mcpToolset());
+  if (useTrading && trading) tools.push(...trading.definitions);
 
   let current: ReturnType<typeof client.beta.messages.stream> | null = null;
   // If the listener navigates away or barges in, stop paying for tokens
@@ -499,7 +531,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       // another turn to actually answer with what came back.
       // Gated on useCourses as well as availability: a tool the request did
       // not enable must never run, whatever the model asks for.
-      if (final.stop_reason === "tool_use" && useCourses && courseTools) {
+      if (final.stop_reason === "tool_use" && (useCourses || useTrading)) {
         const calls = final.content.filter(
           (block): block is Anthropic.Beta.BetaToolUseBlock => block.type === "tool_use"
         );
@@ -508,15 +540,45 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
           return;
         }
 
-        sseSend(res, { type: "status", label: "courses" });
+        if (calls.some((call) => call.name !== "propose_trade")) {
+          sseSend(res, { type: "status", label: "courses" });
+        }
         // Run them together: several courses in one question is the normal case.
         const results = await Promise.all(
           calls.map(async (call): Promise<Anthropic.Beta.BetaToolResultBlockParam> => {
             try {
-              const output = await courseTools.run(
-                call.name,
-                (call.input ?? {}) as Record<string, unknown>
-              );
+              const input = (call.input ?? {}) as Record<string, unknown>;
+
+              if (call.name === "propose_trade") {
+                if (!useTrading || !trading) {
+                  throw new TradingError("Trading is not enabled.");
+                }
+                const proposal = trading.propose(input);
+                // The page renders the confirmation. The model is told only
+                // that it was shown — never that anything was placed, because
+                // it must not be able to claim an outcome it cannot see.
+                sseSend(res, {
+                  type: "confirm",
+                  id: proposal.id,
+                  summary: proposal.summary,
+                  symbol: proposal.intent.symbol,
+                });
+                return {
+                  type: "tool_result",
+                  tool_use_id: call.id,
+                  content: JSON.stringify({
+                    shown: proposal.summary,
+                    status:
+                      "Awaiting the user's typed confirmation on screen. Nothing has been " +
+                      "placed, and you will not be told the outcome.",
+                  }),
+                };
+              }
+
+              if (!useCourses || !courseTools) {
+                throw new Error(`Unknown tool: ${call.name}`);
+              }
+              const output = await courseTools.run(call.name, input);
               return {
                 type: "tool_result",
                 tool_use_id: call.id,
@@ -587,9 +649,61 @@ function describeApiError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The only path that reaches the broker. It requires the ticker typed exactly,
+ * which is why the model is never given an order tool: this cannot be reached
+ * by anything the model says, only by something a person types.
+ */
+async function handleConfirm(req: http.IncomingMessage, res: http.ServerResponse) {
+  const reply = (status: number, body: unknown) =>
+    res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+
+  if (!trading) {
+    reply(400, { error: "Trading is not enabled on this server." });
+    return;
+  }
+
+  let id: unknown;
+  let typed: unknown;
+  try {
+    ({ id, typed } = JSON.parse(await readBody(req)) as { id?: unknown; typed?: unknown });
+  } catch {
+    reply(400, { error: "Expected a JSON body of the form { id, typed }." });
+    return;
+  }
+  if (typeof id !== "string" || typeof typed !== "string") {
+    reply(400, { error: "Both id and typed must be strings." });
+    return;
+  }
+
+  try {
+    const result = await trading.confirm(id, typed);
+    console.log(`Order placed after typed confirmation: ${id}`);
+    reply(200, { placed: true, result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Order not placed (${id}): ${message}`);
+    reply(error instanceof TradingError ? 400 : 502, { placed: false, error: message });
+  }
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/api/chat") {
     void handleChat(req, res);
+    return;
+  }
+  if (req.method === "POST" && req.url === "/api/confirm") {
+    void handleConfirm(req, res);
+    return;
+  }
+  if (req.method === "POST" && req.url === "/api/dismiss") {
+    void readBody(req)
+      .then((raw) => {
+        const { id } = JSON.parse(raw) as { id?: unknown };
+        if (typeof id === "string") trading?.dismiss(id);
+      })
+      .catch(() => {})
+      .finally(() => res.writeHead(204).end());
     return;
   }
   if (req.method === "GET" && req.url === "/api/health") {
@@ -604,6 +718,8 @@ const server = http.createServer((req, res) => {
           courses: courseTools !== null,
           account: mcpEnabled,
           accountSignedIn: accountSessionAvailable(),
+          trading: trading !== null,
+          maxTradeUsd: tradingConfig.maxNotionalUsd,
         })
       );
     return;

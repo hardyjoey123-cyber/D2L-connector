@@ -48,6 +48,13 @@ const el = {
   typedForm: document.getElementById("typed-form"),
   typedInput: document.getElementById("typed-input"),
   toast: document.getElementById("toast"),
+  confirm: document.getElementById("confirm"),
+  confirmTitle: document.getElementById("confirm-title"),
+  confirmSymbol: document.getElementById("confirm-symbol"),
+  confirmInput: document.getElementById("confirm-input"),
+  confirmError: document.getElementById("confirm-error"),
+  confirmPlace: document.getElementById("confirm-place"),
+  confirmCancel: document.getElementById("confirm-cancel"),
   settings: document.getElementById("settings"),
   settingsClose: document.getElementById("settings-close"),
   setName: document.getElementById("set-name"),
@@ -101,7 +108,10 @@ const state = {
 };
 
 /** What the backend says it can do, filled in at boot. */
-const backend = { courses: false, account: false };
+const backend = { courses: false, account: false, trading: false };
+
+/** The order currently awaiting a typed confirmation, if any. */
+let awaitingConfirm = null;
 
 /** Pending re-arm of the recognizer, so repeated calls can't stack timers. */
 let listenRetry = null;
@@ -366,6 +376,7 @@ async function send(text) {
       webSearch: settings.get("webSearch"),
       courses: backend.courses && settings.get("courses"),
       account: backend.account && settings.get("account"),
+      onConfirm: (event) => showConfirm(event),
       onStatus: (label) => {
         // The pause before an answer is much easier to sit through when the
         // interface says what it's doing.
@@ -423,9 +434,93 @@ function speakResponse(text, { record = true } = {}) {
 }
 
 function finishTurn() {
+  // Don't reopen the microphone over an order waiting to be typed.
+  if (awaitingConfirm) {
+    setMode("idle");
+    return;
+  }
   if (state.engaged) startListening();
   else setMode("idle");
 }
+
+/* --------------------------------------------------- order confirmation */
+
+function showConfirm({ id, summary, symbol }) {
+  awaitingConfirm = { id, symbol };
+  // Listening while someone types an order is noise at best.
+  listener.abort();
+  el.confirmTitle.textContent = summary;
+  el.confirmSymbol.textContent = symbol;
+  el.confirmInput.value = "";
+  el.confirmError.hidden = true;
+  el.confirmPlace.disabled = true;
+  el.confirmPlace.textContent = "Place order";
+  el.confirm.hidden = false;
+  el.confirmInput.focus();
+}
+
+function closeConfirm() {
+  awaitingConfirm = null;
+  el.confirm.hidden = true;
+}
+
+function confirmTyped() {
+  if (!awaitingConfirm) return false;
+  return el.confirmInput.value.trim().toUpperCase() === awaitingConfirm.symbol.toUpperCase();
+}
+
+el.confirmInput?.addEventListener("input", () => {
+  el.confirmPlace.disabled = !confirmTyped();
+  el.confirmError.hidden = true;
+});
+
+el.confirmInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && confirmTyped()) el.confirmPlace.click();
+});
+
+el.confirmCancel?.addEventListener("click", () => {
+  const pending = awaitingConfirm;
+  closeConfirm();
+  if (pending) {
+    void fetch("/api/dismiss", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: pending.id }),
+    }).catch(() => {});
+  }
+  toast("Order cancelled. Nothing was placed.");
+  if (state.engaged) startListening();
+});
+
+el.confirmPlace?.addEventListener("click", async () => {
+  if (!awaitingConfirm || !confirmTyped()) return;
+  const pending = awaitingConfirm;
+  el.confirmPlace.disabled = true;
+  el.confirmPlace.textContent = "Placing…";
+  el.confirmError.hidden = true;
+
+  try {
+    const response = await fetch("/api/confirm", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: pending.id, typed: el.confirmInput.value.trim() }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.placed) {
+      throw new Error(body.error ?? `Could not place the order (${response.status}).`);
+    }
+    closeConfirm();
+    appendToLog("assistant", `Order placed: ${pending.symbol}.`);
+    toast(`Order placed: ${pending.symbol}.`);
+    if (state.engaged) startListening();
+  } catch (error) {
+    // Stay open on failure: the person needs to see why, and nothing was placed.
+    el.confirmError.textContent = error instanceof Error ? error.message : String(error);
+    el.confirmError.hidden = false;
+    el.confirmPlace.textContent = "Place order";
+    el.confirmPlace.disabled = !confirmTyped();
+  }
+});
 
 speaker.onStart = () => {
   if (state.mode !== "speaking") setMode("speaking");
@@ -505,6 +600,9 @@ document.addEventListener("keydown", (event) => {
     event.target.tagName === "TEXTAREA";
 
   if (event.key === "Escape") {
+    // An order confirmation is dismissed by its own button, so a stray Escape
+    // cannot silently discard it.
+    if (awaitingConfirm) return;
     if (event.target === el.typedInput) {
       closeTypedInput();
       el.typedInput.blur();
@@ -712,6 +810,7 @@ async function boot() {
     if (Array.isArray(health.models) && health.models.length) models = health.models;
     backend.courses = health.courses === true;
     backend.account = health.account === true;
+    backend.trading = health.trading === true;
   } catch {
     el.modelReadout.textContent = "◦ offline";
     toast("Backend unreachable. Start it with: npm run jarvis");

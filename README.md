@@ -456,6 +456,41 @@ design: speech recognition mishears words, and a misheard ticker or quantity
 would be an irreversible trade. Enabling that is a change to a trading rulebook,
 not a change to this file.
 
+## Proposing trades (off by default)
+
+With `JARVIS_TRADING=enabled` the assistant gains one more tool, and it is
+worth being precise about what it does: **the model cannot place an order.**
+
+`propose_trade` records an intent and returns. The order appears on screen, and
+nothing is sent anywhere until you type the ticker symbol and press the button.
+The server then places it through its own MCP client — a path nothing the model
+says can reach.
+
+That shape is deliberate. Speech recognition mishears words; this session alone
+produced several examples. A spoken confirmation would inherit the same flaw as
+the instruction it was confirming, so the confirmation is typed instead.
+
+| Guardrail | Behaviour |
+| --- | --- |
+| Symbol | US tickers only, 1–5 letters. Crypto pairs and prose are refused. |
+| Side | Buy or sell. No shorting. |
+| Order type | Market or limit. A limit without a price is refused. |
+| Size | Shares or dollars, never both, never zero or negative. |
+| Cap | `JARVIS_MAX_TRADE_USD` per order, default $200. |
+| Confirmation | The exact ticker, typed. Proposals expire after five minutes. |
+| Review | `review_equity_order` runs first when the server offers it. |
+
+The order payload is built from the server's own declared schema rather than
+hardcoded field names — "quantity" and "amount" are both plausible names for
+both shares and dollars, and only the schema says which is which. A required
+field that cannot be filled refuses the order instead of sending a partial one.
+
+`npm run trade:schema` prints those schemas and places nothing.
+
+**If a trading rulebook governs the account, amend it too.** A trade asked for
+out loud does not originate from whatever signal sources that rulebook requires,
+and enabling this here does not change what the rulebook says.
+
 ## Settings
 
 Most of what you'd want to change lives in the **Settings** panel in the app
